@@ -2,10 +2,11 @@
  Very specific, but time-saving library
 
 # TODO
-1. Synth table with partitions
-2. Basic testing script
-3. How to extend Pyspark
-...
+- [ ] Setup local PySpark with Hive
+- [ ] Synth table with partitions
+- [ ] Basic testing script
+- [ ] How to extend Pyspark
+- [ ] Else
 
 ## Features
 1. Getting extensive info about a table
