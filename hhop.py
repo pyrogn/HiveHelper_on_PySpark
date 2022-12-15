@@ -2,11 +2,17 @@ from spark_init import pyspark, spark, col, F
 from funs import read_table
 
 class DFExtender(pyspark.sql.dataframe.DataFrame):
+    '''
+    1. Print table info once or don't print
+    2. checks on null in PK
+    3. pk duplicates 
+    '''
     def __init__(self, schema, table, pk=None, default_schema_write='default'):
         self.schema_name = schema
         self.table_name = table
         self.schema_table_name = schema+'.'+table
-        self.df = self._read_table(self.schema_name, self.table_name)
+        self.pk = pk
+        self._read_table(self.schema_name, self.table_name)
         
         super().__init__(self.df._jdf, self.df.sql_ctx)
         print(f"table info {self.schema_table_name}\n{'-'*40}")
@@ -17,25 +23,49 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self._get_location()
         print(f'location: {self._location}')
         
-        
     def _introduction_info(self):
+        '''
+        Preliminary information 
+        '''
         self.describe_table = spark.sql(f"describe formatted {self.schema_table_name}")
         cols = spark.catalog.listColumns(tableName=self.table_name, dbName=self.schema_name)
         self._part_cols = [col.name for col in cols if col.isPartition == True]
         
-        self.df.printSchema()
-        print(f'cols: {self.df.columns}')
-        print(f'partition columns: {self._part_cols}')
-        print(f'see attribute like this for full info: DataFrame.describe_table.show(100, False)')
+        print(f'to get columns run: df.printSchema() or df.columns')
+        
+        print(f'get DESCRIBE FORMATTED in attr .describe_table: df.describe_table.show(100, False)')
+
+        if self._part_cols:
+            print(f'partition columns: {self._part_cols}')
+            print(f'If the table is huge, please pass on filters by partitioned columns')
+        else:
+            print(f'there are no partitioned columns, it might take a while if the table is huge')
         
     def getInfo(self):
-        ...
+        '''
+        Main information about the table using configs
+        '''
+        cnt_all = self.df.count()
+        self.dict_null = {col: self.df.filter(self.df[col].isNull()).count() for col in self.df.columns}
+        self.dict_null_ext = {k: [v, round(v/cnt_all, 4)] for k, v in sorted(self.dict_null.items(), key=lambda item: -item[1]) if v != 0}
+
+        print(f'cnt all: {cnt_all:,}')
+        print(f'Null values in columns (count, share):\n{self.dict_null_ext}')
+
+    def _analyze_pk(self):
+        for key in self.pk:
+            if key not in self.df.columns:
+                raise Exception(f'{key} is not in columns of chosen DataFrame, fix input or add {key} in DataFrame')
+            if key in self.dict_null:
+                print(f'PK column {key} contains empty values, be careful!')
         
     def _read_table(self, schema, table):
-        self._df = spark.sql(f"select * from {self.schema_table_name}")
-        return self._df
+        self.df = spark.sql(f"select * from {self.schema_table_name}")
     
     def _get_location(self):
+        '''
+        count files from which a table is made of. May drop this part, if it's not practical
+        '''
         self._location = ( # may be rewrite with .rdd.flatMap(lambda x: x).collect()[0]
             self.describe_table
             .filter(col('col_name')=='Location')
@@ -44,9 +74,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             .asDict()['data_type']
         )
         return self._location
-
-    def getInfo(self):
-        return self.count()
     
 
 class SchemaManager:
@@ -93,9 +120,3 @@ class SchemaManager:
         self._cnt_list_tables()
 
         print(f'After dropping tables there are {self._cnt_tables} tables in {self.schema}')
-
-
-
-
-
-    
