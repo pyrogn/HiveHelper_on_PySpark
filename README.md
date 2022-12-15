@@ -1,13 +1,18 @@
 # HiveHelper_on_PySpark
  Very specific, but time-saving library
 
-# TODO
+## TODO
 - [x] Setup local PySpark with Hive
 - [x] Synth table with partitions
 - [ ] Basic testing script (testing inside .py module?)
 - [x] How to extend Pyspark
-- [ ] Full DFExtender
-- [ ] Full SchemaManager
+- [ ] Finish DFExtender
+- [x] Finish SchemaManager
+- [ ] Finish comparing tables
+- [ ] Finish extra
+- [ ] Validate on a Production cluster
+- [ ] Refactoring
+- [ ] Good documentation
 
 ## Features
 1. Getting extensive info about a table
@@ -16,6 +21,6 @@
 4. Validating and getting stats on a table.
 5. Simplifying operations like reading, writing Hive tables.
 
-## Full documentation with code snippets
+## Demonstration of features
 
-[Demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
+### [Demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
