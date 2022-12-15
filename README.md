@@ -2,11 +2,12 @@
  Very specific, but time-saving library
 
 # TODO
-- [ ] Setup local PySpark with Hive
-- [ ] Synth table with partitions
-- [ ] Basic testing script
-- [ ] How to extend Pyspark
-- [ ] Else
+- [x] Setup local PySpark with Hive
+- [x] Synth table with partitions
+- [ ] Basic testing script (testing inside .py module?)
+- [x] How to extend Pyspark
+- [ ] Full DFExtender
+- [ ] Full SchemaManager
 
 ## Features
 1. Getting extensive info about a table
