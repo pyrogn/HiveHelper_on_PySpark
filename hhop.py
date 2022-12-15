@@ -5,7 +5,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     '''
     1. Print table info once or don't print
     2. checks on null in PK
-    3. pk duplicates 
+    3. pk duplicates -> new df with transformations
     '''
     def __init__(self, schema, table, pk=None, default_schema_write='default'):
         self.schema_name = schema
@@ -52,12 +52,26 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         print(f'cnt all: {cnt_all:,}')
         print(f'Null values in columns (count, share):\n{self.dict_null_ext}')
 
+        self._analyze_pk()
+
     def _analyze_pk(self):
         for key in self.pk:
             if key not in self.df.columns:
                 raise Exception(f'{key} is not in columns of chosen DataFrame, fix input or add {key} in DataFrame')
             if key in self.dict_null:
                 print(f'PK column {key} contains empty values, be careful!')
+
+        df_grouped = self.df.groupBy(self.pk)
+
+        cnt_unique_pk = df_grouped.count().count()
+
+        cnt_duplicates = (
+            df_grouped
+            .count()
+            .filter(col('count') > 1)
+            .count()
+        )
+        print(cnt_unique_pk, cnt_duplicates)
         
     def _read_table(self, schema, table):
         self.df = spark.sql(f"select * from {self.schema_table_name}")
