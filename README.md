@@ -18,4 +18,4 @@
 
 ## Full documentation with code snippets
 
-Demo script - (there will be a link)
+[Demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)

@@ -47,9 +47,33 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     def getInfo(self):
         return self.count()
     
+
+def read_table(schema, table):
+    df = spark.sql(f"select * from {schema}.{table}")
+    return df
     
-class SchemaManager
+
+class SchemaManager:
+    def __init__(self, schema='default'):
+        self.schema=schema
+        
+    def _list_tables(self):
+        self._list_of_tables = (
+            spark.sql(f"show tables in {self.schema}")
+            .select('tableName')
+            .rdd.flatMap(lambda x: x)
+            .collect()
+        )
     
+    def _read_head_tables(self, table):
+        
+        try:
+            df = read_table(self.schema, table).take(2)
+            len(df) > 2
+        except:
+            pass
+    
+
     
 def write_table_through_view(sqlContext, df, schema, table):
     '''
