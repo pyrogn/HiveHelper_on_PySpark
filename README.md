@@ -1,6 +1,12 @@
 # HiveHelper_on_PySpark
  Very specific, but time-saving library
 
+# TODO
+1. Synth table with partitions
+2. Basic testing script
+3. How to extend Pyspark
+...
+
 ## Features
 1. Getting extensive info about a table
 2. Comparing a table with a reference table by PK
