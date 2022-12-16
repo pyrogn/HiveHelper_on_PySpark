@@ -41,7 +41,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         print(f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:\n{self.dict_null_ext}")
 
+    def getDFWithNull(self, null_columns=[]):
         # return df with null values
+        # what's the priority
+        if null_columns or self.dict_null_ext:
+            ...
+        else:
+            print('no NULL values in selected or all columns')
 
     def _analyze_pk(self):
         for key in self.pk:
@@ -61,6 +67,14 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self._print_stats('Unique PK count', cnt_unique_pk)
         self._print_stats('PK with duplicates', cnt_duplicates)
         # return df with duplicated PK
+        # show require window functions I suppose
+
+    def compareTables(self, df_ref, key):
+        '''
+        write dataset as option
+        output -> stats
+        '''
+        ...
 
 
 class SchemaManager:
@@ -85,8 +99,9 @@ class SchemaManager:
     
     def _find_empty_tables(self):
         for table in self._dict_of_tables:
+            schema_name = self.schema + '.' + table
             try:
-                slice = read_table(self.schema, table).take(2)
+                slice = read_table(schema_name).take(2)
                 if len(slice) == 0:
                     self._dict_of_tables[table] = 0
             except:

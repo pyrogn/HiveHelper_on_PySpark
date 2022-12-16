@@ -1,11 +1,15 @@
 from functools import reduce
 from spark_init import pyspark, spark, col, F
+from pyspark.sql import DataFrame
 
-def read_table(schema_table, columns='all', verbose=False):
+def read_table(schema_table, columns='all', verbose=False, alias=None):
     df = spark.sql(f"select * from {schema_table}")
 
     if columns != 'all':
         df = df.select(columns)
+    
+    if alias:
+        df = df.alias(alias)
 
     if verbose:
         v_print = lambda *args, **kwargs: print(*args, **kwargs) if verbose else None
@@ -33,10 +37,11 @@ def read_table(schema_table, columns='all', verbose=False):
     return df
 
 
-def unionAll(*dfs): pass
+def unionAll(*dfs):
+    return reduce(DataFrame.unionByName, dfs)
 
 
-def write_table_through_view(sqlContext, df, schema, table):
+def write_table_through_view(df, schema, table):
     '''
     Possibly, a worse and redundant solution than:
     df.write.mode('overwrite').partitionBy('dt_part', 'group_part').saveAsTable('default.part_table_test1')
@@ -44,5 +49,5 @@ def write_table_through_view(sqlContext, df, schema, table):
     Candidate for a change
     '''
     df.createOrReplaceTempView(table)
-    sqlContext.sql(f'drop table if exists {schema}.{table}')
-    sqlContext.sql(f'create table {schema}.{table} stored as parquet as select * from {table}')
+    spark.sql(f'drop table if exists {schema}.{table}')
+    spark.sql(f'create table {schema}.{table} stored as parquet as select * from {table}')
