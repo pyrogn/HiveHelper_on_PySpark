@@ -7,12 +7,12 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     2. checks on null in PK
     3. pk duplicates -> new df with transformations
     '''
-    def __init__(self, schema, table, pk=None, default_schema_write='default'):
+    def __init__(self, schema, table, pk=None, default_schema_write='default', verbose=False):
         self.schema_name = schema
         self.table_name = table
         self.schema_table_name = schema+'.'+table
         self.pk = pk
-        self._read_table(self.schema_name, self.table_name)
+        self.df = read_table(self.schema_name, self.table_name)
         
         super().__init__(self.df._jdf, self.df.sql_ctx)
         print(f"table info {self.schema_table_name}\n{'-'*40}")
@@ -35,6 +35,10 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         
         print(f'get DESCRIBE FORMATTED in attr .describe_table: df.describe_table.show(100, False)')
 
+        for key in self.pk:
+            if key not in self.df.columns:
+                raise Exception(f'{key} is not in columns of the chosen table, fix input or add {key} in the table')
+
         if self._part_cols:
             print(f'partition columns: {self._part_cols}')
             print(f'If the table is huge, please pass on filters by partitioned columns')
@@ -56,8 +60,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
     def _analyze_pk(self):
         for key in self.pk:
-            if key not in self.df.columns:
-                raise Exception(f'{key} is not in columns of chosen DataFrame, fix input or add {key} in DataFrame')
             if key in self.dict_null:
                 print(f'PK column {key} contains empty values, be careful!')
 
@@ -71,11 +73,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             .filter(col('count') > 1)
             .count()
         )
-        print(cnt_unique_pk, cnt_duplicates)
+        print(f'Unique PK count: {cnt_unique_pk:,}\nPK with duplicates count: {cnt_duplicates:,}')
         
-    def _read_table(self, schema, table):
-        self.df = spark.sql(f"select * from {self.schema_table_name}")
-    
     def _get_location(self):
         '''
         count files from which a table is made of. May drop this part, if it's not practical
