@@ -7,61 +7,46 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     2. checks on null in PK
     3. pk duplicates -> new df with transformations
     '''
-    def __init__(self, schema, table, pk=None, default_schema_write='default', verbose=False):
-        self.schema_name = schema
-        self.table_name = table
-        self.schema_table_name = schema+'.'+table
+    def __init__(self, df, pk=None, default_schema_write='default', verbose=False):
+
         self.pk = pk
-        self.df = read_table(self.schema_name, self.table_name)
-        
+        self.df = df
+
+        v_print = lambda *args, **kwargs: print(*args, **kwargs) if verbose else None
+        self._print_stats = lambda string, val: print('{:<20} {:,}'.format(string+':', val))
+
         super().__init__(self.df._jdf, self.df.sql_ctx)
-        print(f"table info {self.schema_table_name}\n{'-'*40}")
         
-        self._introduction_info()
+        self._introduction_checks()
         
-        print()
-        self._get_location()
-        print(f'location: {self._location}')
         
-    def _introduction_info(self):
+    def _introduction_checks(self):
         '''
         Preliminary information 
         '''
-        self.describe_table = spark.sql(f"describe formatted {self.schema_table_name}")
-        cols = spark.catalog.listColumns(tableName=self.table_name, dbName=self.schema_name)
-        self._part_cols = [col.name for col in cols if col.isPartition == True]
-        
-        print(f'to get columns run: df.printSchema() or df.columns')
-        
-        print(f'get DESCRIBE FORMATTED in attr .describe_table: df.describe_table.show(100, False)')
-
         for key in self.pk:
             if key not in self.df.columns:
                 raise Exception(f'{key} is not in columns of the chosen table, fix input or add {key} in the table')
 
-        if self._part_cols:
-            print(f'partition columns: {self._part_cols}')
-            print(f'If the table is huge, please pass on filters by partitioned columns')
-        else:
-            print(f'there are no partitioned columns, it might take a while if the table is huge')
-        
     def getInfo(self):
         '''
         Main information about the table using configs
         '''
         cnt_all = self.df.count()
         self.dict_null = {col: self.df.filter(self.df[col].isNull()).count() for col in self.df.columns}
-        self.dict_null_ext = {k: [v, round(v/cnt_all, 4)] for k, v in sorted(self.dict_null.items(), key=lambda item: -item[1]) if v != 0}
+        self.dict_null_ext = {k: [v, round(v/cnt_all, 4)] for k, v in sorted(self.dict_null.items(), key=lambda item: -item[1]) if v > 0}
 
-        print(f'cnt all: {cnt_all:,}')
-        print(f'Null values in columns (count, share):\n{self.dict_null_ext}')
-
+        self._print_stats('Count all', cnt_all)
         self._analyze_pk()
+
+        print(f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:\n{self.dict_null_ext}")
+
+        # return df with null values
 
     def _analyze_pk(self):
         for key in self.pk:
-            if key in self.dict_null:
-                print(f'PK column {key} contains empty values, be careful!')
+            if key in self.dict_null_ext:
+                print(f"PK column '{key}' contains empty values, be careful!")
 
         df_grouped = self.df.groupBy(self.pk)
 
@@ -73,21 +58,10 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             .filter(col('count') > 1)
             .count()
         )
-        print(f'Unique PK count: {cnt_unique_pk:,}\nPK with duplicates count: {cnt_duplicates:,}')
-        
-    def _get_location(self):
-        '''
-        count files from which a table is made of. May drop this part, if it's not practical
-        '''
-        self._location = ( # may be rewrite with .rdd.flatMap(lambda x: x).collect()[0]
-            self.describe_table
-            .filter(col('col_name')=='Location')
-            .select('data_type')
-            .collect()[0]
-            .asDict()['data_type']
-        )
-        return self._location
-    
+        self._print_stats('Unique PK count', cnt_unique_pk)
+        self._print_stats('PK with duplicates', cnt_duplicates)
+        # return df with duplicated PK
+
 
 class SchemaManager:
     '''
