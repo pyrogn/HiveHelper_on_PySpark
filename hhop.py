@@ -1,5 +1,5 @@
 from spark_init import pyspark, spark, col, F
-from funs import read_table
+from funs import read_table, write_table_through_view
 from functools import reduce
 from operator import add
 
@@ -14,6 +14,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self.pk = pk
         self.df = df
         self.verbose = verbose
+        self.default_schema_write = default_schema_write
 
         v_print = lambda *args, **kwargs: print(*args, **kwargs) if verbose else None
         self._print_stats = lambda string, val: print('{:<25} {:,}'.format(string+':', val))
@@ -112,6 +113,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         common_cols = (df1_cols & df2_cols) - set(key)
 
         diff_postfix = '_is_diff'
+        columns_diff_postfix = [column + diff_postfix for column in common_cols]
         sum_postfix = '_sum_error'
 
         cols_not_in_main, cols_not_in_ref = df2_cols - df1_cols, df1_cols - df2_cols
@@ -126,16 +128,33 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         df_joined = df1.join(df2, on=key, how='full')
 
-        def add_column_is_diff(df, col):
+        def add_column_is_diff(df, col): # is this filter correct?
             cond_diff = f"""case
             when
-                main.{dummy1} is not null and ref.{dummy2} is not null and main.{col} != ref.{col}
-                then 1
-                else 0
+                ({dummy1} is null or {dummy2} is null) 
+                or
+                (main.{col} is null and ref.{col} is null)
+                or 
+                (main.{col} = ref.{col})
+                then 0
+                else 1
             end"""
             return df.withColumn(col+diff_postfix, F.expr(cond_diff))
 
         df_temp = reduce(add_column_is_diff, common_cols, df_joined)
+
+        put_postfix_columns = lambda column, table: f'{table}.{column} as {column}_{table}'
+        self.df_with_errors = (
+            df_temp
+            .selectExpr(
+                *key,
+                *map(put_postfix_columns, common_cols, ['main']*len(common_cols)),
+                *map(put_postfix_columns, common_cols, ['ref']*len(common_cols)),
+                *columns_diff_postfix,
+                #something else?
+            ).withColumn('sum_errors', reduce(add, [col(column) for column in columns_diff_postfix]))
+        )
+        self.df_with_errors = DFExtender(self.df_with_errors, pk=key)
 
         diff_results = (
             df_temp
@@ -179,6 +198,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         for key, val in dict(zip(cases_full_join.keys(), cnt_results)).items():
             print('{:<25} {:,}'.format(key+':', val))
+    
+    def write_table(self, table_name):
+        postfix = '_check_detail'
+        table_name += postfix
+        write_table_through_view(self, schema=self.default_schema_write, table=table_name)
+        print(f'written table {self.default_schema_write}.{table_name}')
+        
 
 
 class SchemaManager:
