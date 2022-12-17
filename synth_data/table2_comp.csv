@@ -1,0 +1,7 @@
+index;pk1;pk2;var1;var2;dt_part;group_part
+1;key1;1;value19;value2_1;2022-12-15;group7
+2;key1;2;value1;value2_55;2022-12-16;group2
+3;key1;3;value1;value2_1;2022-12-16;group3
+4;key2;1;value_not_null;value2_1;2022-12-17;group10
+5;key2;2;value1;value2_1;2022-12-18;group2
+6;key2;5;value1;;2022-12-20;group3
