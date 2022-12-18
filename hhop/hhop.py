@@ -10,16 +10,19 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
     Args:
         pyspark (_type_): _description_
+    
+    !Class is not tested on complex types as array and struct!
     """
 
     def __init__(self, df, pk=None, default_schema_write='default', verbose=False):
         """_summary_
-
+        
         Args:
-            df (_type_): _description_
-            pk (_type_, optional): _description_. Defaults to None.
-            default_schema_write (str, optional): _description_. Defaults to 'default'.
-            verbose (bool, optional): _description_. Defaults to False.
+            df (pyspark.sql.dataframe.DataFrame): DataFrame to analyze
+            pk ((list, tuple, set), optional): Primary Key of DF. Defaults to None.
+            default_schema_write (str, optional): MIGHT BE REDUNDANT. Defaults to 'default'.
+            verbose (bool, optional): Choose if you want to receive additional messages. \
+                Defaults to False.
         """
         self.pk = pk
         self.df = df
@@ -35,14 +38,15 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         self._introduction_checks()
 
-        self._print_sorted_dict = lambda dict, val: {k: [v, round(
+        self._get_sorted_dict = lambda dict, val: {k: [v, round(
             v/val, 4)] for k, v in sorted(dict.items(), key=lambda item: -item[1]) if v > 0}
 
     def _introduction_checks(self):
         """_summary_
 
+
         Raises:
-            Exception: _description_
+            Exception: Provide only columns to pk that are present in the DF
         """
 
         if self.pk:
@@ -51,7 +55,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                     raise Exception(
                         f'{key} is not in columns of the chosen table, fix input or add {key} in the table')
 
-    def getInfo(self):
+    def get_info(self):
         """_summary_
         """
         self._analyze_pk()
@@ -61,7 +65,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         dict_null = {col: self.df.filter(
             self.df[col].isNull()).count() for col in self.df.columns}
-        self.dict_null_ext = self._print_sorted_dict(dict_null, cnt_all)
+        self.dict_null_ext = self._get_sorted_dict(dict_null, cnt_all)
 
         if self.pk and self.verbose:
             for key in self.pk:
@@ -72,16 +76,16 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         print(
             f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:\n{self.dict_null_ext}")
 
-    def getDFWithNull(self, null_columns=[]):
+    def get_df_with_null(self, null_columns=[]):
         """_summary_
 
-            This method 
+            This method calculate and return DF with selected cols that have NULL values
 
         Args:
-            null_columns (list, optional): _description_. Defaults to [].
+            null_columns (list, optional): Columns. Defaults to [].
 
         Raises:
-            Exception: _description_
+            Exception: Provide only columns to null_columns that are present in the DF
 
         Returns:
             pyspark.sql.dataframe.DataFrame:
@@ -91,8 +95,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             in descending order
         """
         if not hasattr(self, 'dict_null_ext'):
-            print('Running method .getInfo() first\n')
-            self.getInfo()
+            print('Running method .get_info() first\n')
+            self.get_info()
         if (set(null_columns) - set(self.df.columns)):
             raise Exception(
                 f'columns {set(null_columns) - set(self.df.columns)} not in provided DF')
@@ -139,14 +143,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                     .orderBy([col('cnt_pk').desc(), *[col(i) for i in self.pk]])
                 )
                 self.v_print(
-                    f'You can access DF with PK duplicates in attribute `.df_duplicates_pk`\n')
+                    f'You can access DF with PK duplicates in an attribute `.df_duplicates_pk`\n')
         else:
             self.v_print(f'PK hasn\'t been provided!\n')
         # 0 - cnt rows, 1 - Unique PK, 2 - PK with duplicates
         self.pk_stats = [cnt_all, cnt_unique_pk, cnt_with_duplicates_pk]
-
-        # return df with duplicated PK
-        # show require window functions I suppose
 
     def _print_pk_stats(self):
         self._print_stats('Count all', self.pk_stats[0])
@@ -154,11 +155,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self._print_stats('Unique PK count', self.pk_stats[1])
             self._print_stats('PK with duplicates', self.pk_stats[2])
 
-    def compareTables(self, df_ref):
+    def compare_tables(self, df_ref):
         """_summary_
 
         Args:
-            df_ref (_type_): _description_
+            df_ref (pyspark.sql.dataframe.DataFrame): _description_
 
         Raises:
             Exception: _description_
@@ -206,7 +207,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         df_joined = df1.join(df2, on=key, how='full')
 
-        def add_column_is_diff(df, col):  # is this filter correct?
+        def add_column_is_diff(df, col):
             cond_diff = f"""case
             when
                 ({dummy1} is null or {dummy2} is null) 
@@ -282,7 +283,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 res_int = res[0]['count']
             cnt_results.append(res_int)
 
-        dict_print_errors = self._print_sorted_dict(
+        dict_print_errors = self._get_sorted_dict(
             diff_results_dict, cnt_results[2])
         if not common_cols:
             print('There are no common columns outside of PK\n')
@@ -297,6 +298,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print('{:<25} {:,}'.format(key+':', val))
 
     def write_table(self, table_name):
+        '''may be redundant'''
         postfix = '_check_detail'
         table_name += postfix
         write_table(
@@ -306,8 +308,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
 class SchemaManager:
     '''
-    Class drops empty tables where there are 0 records or table folder doesn't exist
-
+        Class drops empty tables where there are 0 records or table folder doesn't exist
     '''
 
     def __init__(self, schema='default'):
@@ -341,10 +342,13 @@ class SchemaManager:
             [table for table, val in self.dict_of_tables.items() if val == 0])
         perc_empty = round(self._cnt_empty_tables / self._cnt_tables * 100, 2)
 
-        print(f'{self._cnt_empty_tables} going to be dropped out of {self._cnt_tables} ({perc_empty}%). Schema: {self.schema}',end='\n')
-        print(f"Data about tables stored in attribute '.dict_of_tables':\n1 - has data, 0 - doesn't and going to be deleted")
+        print(f'{self._cnt_empty_tables} going to be dropped out of {self._cnt_tables}\
+             ({perc_empty}%). Schema: {self.schema}', end='\n')
+        print("Data about tables stored in attribute '.dict_of_tables':\n\
+            1 - has data, 0 - doesn't and going to be deleted")
 
     def drop_empty_tables(self):
+        '''Drops empty tables in a selected schema'''
 
         for table, val in self.dict_of_tables.items():
             if val == 0:

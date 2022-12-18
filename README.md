@@ -9,7 +9,7 @@
 - [x] Finish DFExtender
 - [x] Finish SchemaManager
 - [x] Finish comparing tables
-- [ ] Finish extra
+- [ ] Finish extra, reading from Hive, writing to Hive
 - [ ] Validate on a Production cluster
 - [ ] Refactoring
 - [ ] Good documentation
@@ -21,6 +21,20 @@
 3. Getting info about schemas and tables in a schema. Cleaning old tables.
 4. Validating and getting stats on a table.
 5. Simplifying operations like reading, writing Hive tables.
+
+## Classes
+
+### DFExtender
+
+Description  
+
+Available methods:
+
+### SchemaManager
+
+Description
+
+Available methods: 
 
 ## Demonstration of features
 

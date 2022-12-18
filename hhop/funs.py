@@ -32,7 +32,7 @@ def read_table(schema_table, columns='all', verbose=False, alias=None):
         if _part_cols:
             print(f'partition columns: {_part_cols}')
         else:
-            print(f'there are no partition columns')
+            print('there are no partition columns')
         
     return df
 
@@ -47,6 +47,8 @@ def write_table(df, schema, table):
     df.write.mode('overwrite').partitionBy('dt_part', 'group_part').saveAsTable('default.part_table_test1')
 
     Candidate for a change
+
+    Does it support partitions?????? I don't think so
     '''
     df.createOrReplaceTempView(table)
     spark.sql(f'drop table if exists {schema}.{table}')
