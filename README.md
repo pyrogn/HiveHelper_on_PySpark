@@ -4,15 +4,16 @@
 ## TODO
 - [x] Setup local PySpark with Hive
 - [x] Synth table with partitions
-- [ ] Basic testing script (testing inside .py module?)
+- [x] Basic testing script (testing inside .ipynb)
 - [x] How to extend Pyspark
-- [ ] Finish DFExtender
+- [x] Finish DFExtender
 - [x] Finish SchemaManager
-- [ ] Finish comparing tables
+- [x] Finish comparing tables
 - [ ] Finish extra
 - [ ] Validate on a Production cluster
 - [ ] Refactoring
 - [ ] Good documentation
+- [ ] Second .ipynb without all testing cases (or better solution?)
 
 ## Features
 1. Getting extensive info about a table
@@ -24,3 +25,5 @@
 ## Demonstration of features
 
 ### [Demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
+
+### [Code](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop)
