@@ -1,4 +1,4 @@
-from spark_init import pyspark, spark, col, F
+from spark_init import pyspark, spark, col, F, W
 from funs import read_table, write_table_through_view
 from functools import reduce
 from operator import add
@@ -16,7 +16,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self.verbose = verbose
         self.default_schema_write = default_schema_write
 
-        # v_print = lambda *args, **kwargs: print(*args, **kwargs) if verbose else None
+        self.v_print = lambda *args, **kwargs: print(*args, **kwargs) if verbose else None
         self._print_stats = lambda string, val: print('{:<25} {:,}'.format(string+':', val))
 
         super().__init__(self.df._jdf, self.df.sql_ctx)
@@ -48,6 +48,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         dict_null = {col: self.df.filter(self.df[col].isNull()).count() for col in self.df.columns}
         # self.dict_null_ext = {k: [v, round(v/cnt_all, 4)] for k, v in sorted(self.dict_null.items(), key=lambda item: -item[1]) if v > 0}
         self.dict_null_ext = self._print_sorted_dict(dict_null, cnt_all)
+
         if self.pk and self.verbose:
             for key in self.pk:
                 if key in self.dict_null_ext:
@@ -58,25 +59,52 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     def getDFWithNull(self, null_columns=[]):
         # return df with null values
         # what's the priority
-        if null_columns or self.dict_null_ext:
-            ...
+        if (set(null_columns) - set(self.df.columns)): raise Exception(f'columns {set(null_columns) - set(self.df.columns)} not in provided DF')
+        if self.dict_null_ext:
+            if set(null_columns) & set(self.dict_null_ext):
+                cols_filter = null_columns
+            else:
+                print(f'No NULL values found in provided {null_columns}, using all: {self.dict_null_ext.keys()}')
+                cols_filter = self.dict_null_ext.keys()
+
+            self.df_with_nulls = (
+                    self.df
+                    .withColumn('cnt_nulls', sum(self.df[col].isNull().cast('int') for col in cols_filter))
+                    .filter(col('cnt_nulls') > 0)
+                    .orderBy(col('cnt_nulls').desc())
+                )
+            return self.df_with_nulls
         else:
-            print('no NULL values in selected or all columns')
+            print('no NULL values in selected or all null columns')
 
     def _analyze_pk(self):
         
         cnt_all = self.df.count()
 
-        df_grouped = self.df.groupBy(self.pk)
+        cnt_unique_pk = cnt_with_duplicates_pk = 0
+        if self.pk:
+            df_grouped = self.df.groupBy(self.pk)
 
-        cnt_unique_pk = df_grouped.count().count()
+            cnt_unique_pk = df_grouped.count().count()
 
-        cnt_with_duplicates_pk = (
-            df_grouped
-            .count()
-            .filter(col('count') > 1)
-            .count()
-        )
+            cnt_with_duplicates_pk = (
+                df_grouped
+                .count()
+                .filter(col('count') > 1)
+                .count()
+            )
+
+            if cnt_with_duplicates_pk:
+                window_duplicates_pk = W.partitionBy(self.pk)
+                self.df_duplicates_pk = (
+                    self.df
+                    .withColumn('cnt_pk', F.count(F.lit(1)).over(window_duplicates_pk))
+                    .filter(col('cnt_pk') > 1)
+                    .orderBy([col('cnt_pk').desc(), *[col(i) for i in self.pk]])
+                )
+                self.v_print(f'You can access DF with PK duplicates in attribute `.df_duplicates_pk`\n')
+        else:
+            self.v_print(f'PK hasn\'t been provided!\n')
         # 0 - cnt rows, 1 - Unique PK, 2 - PK with duplicates
         self.pk_stats = [cnt_all, cnt_unique_pk, cnt_with_duplicates_pk]
         
@@ -85,8 +113,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
     def _print_pk_stats(self):
         self._print_stats('Count all', self.pk_stats[0])
-        self._print_stats('Unique PK count', self.pk_stats[1])
-        self._print_stats('PK with duplicates', self.pk_stats[2])
+        if self.pk:
+            self._print_stats('Unique PK count', self.pk_stats[1])
+            self._print_stats('PK with duplicates', self.pk_stats[2])
 
     def compareTables(self, df_ref):
         '''
