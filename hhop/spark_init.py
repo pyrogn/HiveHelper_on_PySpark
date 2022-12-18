@@ -13,6 +13,6 @@ spark = (
     .config("spark.sql.catalogImplementation", "hive")
     .appName("app")
     .getOrCreate()
-    )
+)
 
 spark.sparkContext.setLogLevel('ERROR')

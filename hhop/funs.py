@@ -41,7 +41,7 @@ def union_all(*dfs):
     return reduce(DataFrame.unionByName, dfs)
 
 
-def write_table_through_view(df, schema, table):
+def write_table(df, schema, table):
     '''
     Possibly, a worse and redundant solution than:
     df.write.mode('overwrite').partitionBy('dt_part', 'group_part').saveAsTable('default.part_table_test1')
