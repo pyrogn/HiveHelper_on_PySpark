@@ -22,6 +22,12 @@
 4. Validating and getting stats on a table.
 5. Simplifying operations like reading, writing Hive tables.
 
+## Demonstration of features
+
+### [Demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
+
+### [Code](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop)
+
 ## Classes
 
 ### DFExtender
@@ -36,8 +42,12 @@ Description
 
 Available methods: 
 
-## Demonstration of features
+## Useful functions
 
-### [Demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
-
-### [Code](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop)
+### union_all
+Description
+Args
+### read_table
+Description
+Args
+### write_table?
