@@ -37,7 +37,7 @@ def read_table(schema_table, columns='all', verbose=False, alias=None):
     return df
 
 
-def unionAll(*dfs):
+def union_all(*dfs):
     return reduce(DataFrame.unionByName, dfs)
 
 
