@@ -66,7 +66,7 @@ def __analyze_table_location(schema_table, is_partitioned):
                 for f in fs.get(conf).listStatus(path)
                 if str(f.getPath()).endswith(".parquet")  # .endswith(".orc")
             ]
-        )  # only works with parquet. How to change for other formats?
+        )  # only works with parquet. Some may use ORC, but really shouldn't
 
     print(f"location: {table_location}")
     print(f"{cnt_files} parquet files at the location")

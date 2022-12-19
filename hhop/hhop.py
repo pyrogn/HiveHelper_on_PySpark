@@ -9,6 +9,8 @@ import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 from funs import read_table, write_table
 
+DICT_PRINT_MAX_LEN = 15
+
 
 class DFExtender(pyspark.sql.dataframe.DataFrame):
     """_summary_
@@ -51,6 +53,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             if v > 0
         }
 
+    def __print_dict(self, dictionary, attr_name, *args, **kwargs):
+        if len(dictionary) <= DICT_PRINT_MAX_LEN:
+            print(dictionary)
+        else:
+            print(f"dictionary is too large ({len(dictionary)} > {DICT_PRINT_MAX_LEN})")
+            print(f"You can access the dictionary in the attribute {attr_name}")
+
     def _introduction_checks(self):
         """_summary_
 
@@ -77,16 +86,15 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             col: self.df.filter(self.df[col].isNull()).count()
             for col in self.df.columns
         }
-        self.dict_null_ext = self._get_sorted_dict(dict_null, cnt_all)
+        self.dict_null_in_cols = self._get_sorted_dict(dict_null, cnt_all)
 
         if self.pk and self.verbose:
             for key in self.pk:
-                if key in self.dict_null_ext:
+                if key in self.dict_null_in_cols:
                     print(f"PK column '{key}' contains empty values, be careful!")
 
-        print(
-            f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:\n{self.dict_null_ext}"
-        )
+        print(f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:")
+        self.__print_dict(self.dict_null_in_cols, "dict_null_in_cols")
 
     def get_df_with_null(self, null_columns=[]):
         """_summary_
@@ -106,23 +114,25 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             in selected columns
             in descending order
         """
-        if not hasattr(self, "dict_null_ext"):
+        if not hasattr(self, "dict_null_in_cols"):
             print("Running method .get_info() first\n")
             self.get_info()
 
-        extra_columns = set(null_columns) - set(self.df.columns) # what if this is very long?
+        extra_columns = set(null_columns) - set(
+            self.df.columns
+        )  # what if this is very long?
         if extra_columns:
             raise Exception(
                 f"columns {extra_columns} do not present in the provided DF"
             )
-        if self.dict_null_ext:
-            if set(null_columns) & set(self.dict_null_ext):
+        if self.dict_null_in_cols:
+            if set(null_columns) & set(self.dict_null_in_cols):
                 cols_filter = null_columns
             else:
                 print(
                     f"No NULL values found in provided {null_columns}, using all: {self.dict_null_ext.keys()}"
                 )
-                cols_filter = self.dict_null_ext.keys()
+                cols_filter = self.dict_null_in_cols.keys()
 
             self.df_with_nulls = (
                 self.df.withColumn(
@@ -293,13 +303,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         if not common_cols:
             print("There are no common columns outside of PK\n")
         elif dict_print_errors:
-            print(
-                f"Errors in columns - {{'column': [count is_error, share is_error]}}\n{dict_print_errors}\n"
-            )
+            self.dict_cols_with_errors = dict_print_errors
+            print(f"Errors in columns - {{'column': [count is_error, share is_error]}}")
+            self.__print_dict(dict_print_errors, "dict_cols_with_errors")
         else:
             print("There are no errors in non PK columns\n")
 
-        print("Count stats of matching main and reference tables:")
+        print("\nCount stats of matching main and reference tables:")
         for key, val in dict(zip(cases_full_join.keys(), cnt_results)).items():
             print("{:<25} {:,}".format(key + ":", val))
 
