@@ -8,11 +8,11 @@ import pandas as pd
 from pyspark.sql.window import Window as W
 
 spark = (
-    SparkSession
-    .builder
-    .config("spark.sql.catalogImplementation", "hive")
+    SparkSession.builder.config("spark.sql.catalogImplementation", "hive")
     .appName("app")
     .getOrCreate()
 )
 
-spark.sparkContext.setLogLevel('ERROR')
+sc = spark.sparkContext
+
+sc.setLogLevel("ERROR")
