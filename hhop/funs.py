@@ -1,4 +1,5 @@
 from functools import reduce
+import subprocess
 from spark_init import pyspark, spark, sc, col, F
 from pyspark.sql import DataFrame
 import os
@@ -49,24 +50,15 @@ def __analyze_table_location(schema_table, is_partitioned):
         .collect()[0]
     )
 
-    list_folders = [""]
-    if is_partitioned:
-        list_folders = (
-            spark.sql(f"show partitions {schema_table}")
-            .rdd.flatMap(lambda x: x)
-            .collect()
-        )
-
-    cnt_files = 0
-    for folder in list_folders:
-        path = hadoop.fs.Path(os.path.join(table_location, folder))
-        cnt_files += len(
-            [
-                str(f.getPath())
-                for f in fs.get(conf).listStatus(path)
-                if str(f.getPath()).endswith(".parquet")  # .endswith(".orc")
-            ]
-        )  # only works with parquet. Some may use ORC, but really shouldn't
+    cnt_files_raw = subprocess.getoutput(
+        f"hdfs dfs -ls -R {table_location} | grep '.parquet' | wc -l"
+    )
+    try:
+        cnt_files = int(cnt_files_raw.split("\n")[-1].strip())
+    except Exception as e:
+        print("Error in count files. Check command output:")
+        print(cnt_files_raw)
+        print(e)
 
     print(f"location: {table_location}")
     print(f"{cnt_files} parquet files at the location")
