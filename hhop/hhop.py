@@ -196,18 +196,23 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self._print_stats("Unique PK count", self.pk_stats[1])
             self._print_stats("PK with duplicates", self.pk_stats[2])
 
-    def compare_tables(self, df_ref):
-        """_summary_
+    def compare_tables(self, df_ref:DataFrame):
+        """Comparing two tables based on `pk` from main class
+        ! I should consider breaking down this huge method
 
         Args:
-            df_ref (pyspark.sql.dataframe.DataFrame): _description_
+            df_ref (DataFrame): second DF (reference DF)
+            
+            pk (inherited)
 
         Raises:
             Exception: _description_
             Exception: _description_
+        
+        Results:
 
-        Returns:
-            _type_: _description_
+        Attrs maybe:
+
         """
         if not self.pk:
             raise Exception("No PK have been provided")
@@ -260,19 +265,18 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             end"""
             return df.withColumn(col + diff_postfix, F.expr(cond_diff))
 
-        df_temp = reduce(add_column_is_diff, common_cols, df_joined)
+        df_with_errors_temp = reduce(add_column_is_diff, common_cols, df_joined)
 
         def put_postfix_columns(column, table):
             return f"{table}.{column} as {column}_{table}"
 
-        self.df_with_errors = df_temp.selectExpr(
+        self.df_with_errors = df_with_errors_temp.selectExpr(
             *key,
             *map(put_postfix_columns, common_cols, ["main"] * len(common_cols)),
             *map(put_postfix_columns, common_cols, ["ref"] * len(common_cols)),
             *columns_diff_postfix,
             dummy1,
             dummy2
-            # something else?
         )
 
         diff_results_dict = {}
@@ -282,9 +286,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 reduce(add, [col(column) for column in columns_diff_postfix]),
             )
 
-            self.df_with_errors = DFExtender(self.df_with_errors, pk=key)
-            # need to make protection if only PK is given
-            diff_results = df_temp.agg(
+            diff_results = self.df_with_errors.agg(
                 *(
                     F.sum(col_is_diff + diff_postfix).alias(col_is_diff + sum_postfix)
                     for col_is_diff in common_cols
@@ -296,7 +298,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 diff_results_dict[column] = diff_results[sum_column]
 
         # 2 part
-        k = df_temp.groupBy(dummy1, dummy2).count().cache()
+        df_cnt_pk_errors = df_with_errors_temp.groupBy(dummy1, dummy2).count().cache()
 
         cases_full_join = {
             # 0
@@ -309,7 +311,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         cnt_results = []
         for key, value in cases_full_join.items():
-            res = k.filter(value).select("count").collect()
+            res = df_cnt_pk_errors.filter(value).select("count").collect()
             res_int = 0
             if res:
                 res_int = res[0]["count"]
@@ -334,13 +336,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
     def __compare_calc_pk(self):
         ...
-
-    def write_table(self, table_name):
-        """may be redundant"""
-        postfix = "_check_detail"
-        table_name += postfix
-        write_table(self, schema=self.default_schema_write, table=table_name)
-        print(f"written table {self.default_schema_write}.{table_name}")
 
 
 class SchemaManager:

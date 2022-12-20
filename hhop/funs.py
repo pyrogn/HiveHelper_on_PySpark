@@ -2,9 +2,28 @@ from functools import reduce
 import subprocess
 from spark_init import pyspark, spark, sc, col
 from pyspark.sql import DataFrame
+from typing import List, Set, Tuple
 
 
-def read_table(schema_table, columns="all", verbose=False, alias=None, cnt_files=False):
+def read_table(
+    schema_table: str,
+    columns: (List | Set | Tuple) = "all",
+    verbose: bool = False,
+    alias: str = None,
+    cnt_files: bool = False,
+) -> DataFrame:
+    """Function for fast reading a table from Hive
+
+    Args:
+        schema_table (str): _description_
+        columns (List  |  Set  |  Tuple, optional): _description_. Defaults to "all".
+        verbose (bool, optional): _description_. Defaults to False.
+        alias (str, optional): _description_. Defaults to None.
+        cnt_files (bool, optional): _description_. Defaults to False.
+
+    Returns:
+        DataFrame: _description_
+    """
     df = spark.sql(f"select * from {schema_table}")
 
     if columns != "all":
@@ -49,18 +68,19 @@ def __analyze_table_location(schema_table, is_partitioned):
         .collect()[0]
     )
 
-    cnt_files_raw = subprocess.getoutput(
-        f"hdfs dfs -ls -R {table_location} | grep '.parquet' | wc -l"
-    )
+    shell_command = f"hdfs dfs -ls -R {table_location} | grep '.parquet' | wc -l"
+    cnt_files_raw = subprocess.getoutput(shell_command)
+    print(f"Running command: {shell_command}")
+
     try:
         cnt_files = int(cnt_files_raw.split("\n")[-1].strip())
+        print(f"{cnt_files} parquet files in the location:")
+        print(table_location)
+
     except Exception as e:
         print("Error in count files. Check command output:")
         print(cnt_files_raw)
         print(e)
-
-    print(f"{cnt_files} parquet files in the location:")
-    print(table_location)
 
 
 def union_all(*dfs):
@@ -68,15 +88,25 @@ def union_all(*dfs):
 
 
 def write_table(
-    df,
-    table,
-    schema="default",
-    mode="overwrite",
-    format_files="parquet",
-    partition_cols=[],
+    df: DataFrame,
+    table: str,
+    schema: str = "default",
+    mode: str = "overwrite",
+    format_files: str = "parquet",
+    partition_cols: (List | Set | Tuple) = [],
 ):
-    """
-    This function saves a DF to Hive using common default values
+    """This function saves a DF to Hive using common default values
+
+    Args:
+        df (DataFrame): _description_
+        table (str): _description_
+        schema (str, optional): _description_. Defaults to "default".
+        mode (str, optional): _description_. Defaults to "overwrite".
+        format_files (str, optional): _description_. Defaults to "parquet".
+        partition_cols (List  |  Set  |  Tuple, optional): _description_. Defaults to [].
+
+    Raises:
+        Exception: _description_
     """
     df_save = df.write.mode(mode).format(format_files)
 
