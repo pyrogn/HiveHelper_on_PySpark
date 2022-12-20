@@ -1,8 +1,7 @@
 from functools import reduce
 import subprocess
-from spark_init import pyspark, spark, sc, col, F
+from spark_init import pyspark, spark, sc, col
 from pyspark.sql import DataFrame
-import os
 
 
 def read_table(schema_table, columns="all", verbose=False, alias=None, cnt_files=False):

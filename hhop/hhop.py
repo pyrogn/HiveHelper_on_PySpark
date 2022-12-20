@@ -1,8 +1,9 @@
 from functools import reduce
 from operator import add
 from inspect import cleandoc
-import warnings
+from typing import List
 
+from pyspark.sql import DataFrame
 from spark_init import pyspark, spark
 from pyspark.sql.functions import col
 import pyspark.sql.functions as F
@@ -21,7 +22,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     !Class is not tested on complex types as array and struct!
     """
 
-    def __init__(self, df, pk=None, default_schema_write="default", verbose=False):
+    def __init__(
+        self,
+        df: DataFrame,
+        pk: List[str] = [],
+        default_schema_write: str = "default",
+        verbose=False,
+    ) -> DataFrame:
         """_summary_
         
         Args:
@@ -82,10 +89,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         cnt_all = self.pk_stats[0]
 
-        dict_null = {
-            col: self.df.filter(self.df[col].isNull()).count()
-            for col in self.df.columns
-        }
+        dict_null = (
+            self.df.select(
+                [F.count(F.when(col(c).isNull(), c)).alias(c) for c in self.df.columns]
+            )
+            .rdd.collect()[0] # is it fail proof?
+            .asDict()
+        )
         self.dict_null_in_cols = self._get_sorted_dict(dict_null, cnt_all)
 
         if self.pk and self.verbose:
@@ -106,6 +116,10 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         Raises:
             Exception: Provide only columns to null_columns that are present in the DF
+
+        Attrs:
+            dict_null_in_cols
+            df_with_nulls
 
         Returns:
             pyspark.sql.dataframe.DataFrame:
@@ -313,6 +327,12 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         for key, val in dict(zip(cases_full_join.keys(), cnt_results)).items():
             print("{:<25} {:,}".format(key + ":", val))
 
+    def __compare_calc_diff(self):
+        ...
+
+    def __compare_calc_pk(self):
+        ...
+
     def write_table(self, table_name):
         """may be redundant"""
         postfix = "_check_detail"
@@ -327,7 +347,7 @@ class SchemaManager:
     Class drops empty tables where there are 0 records or table folder doesn't exist
     """
 
-    def __init__(self, schema="default"):
+    def __init__(self, schema: str = "default"):
         self.schema = schema
         self._cnt_list_tables()
         print(f"{self._cnt_tables} tables in {schema}")
@@ -352,7 +372,7 @@ class SchemaManager:
                 slice_df = read_table(schema_name).take(2)
                 if len(slice_df) == 0:
                     self.dict_of_tables[table] = 0
-            except:
+            except:  # spark might fail to read a table without a root folder
                 self.dict_of_tables[table] = 0
 
         self._cnt_empty_tables = len(
@@ -361,7 +381,7 @@ class SchemaManager:
         perc_empty = round(self._cnt_empty_tables / self._cnt_tables * 100, 2)
 
         print(
-            f"{self._cnt_empty_tables} going to be dropped out of {self._cnt_tables}({perc_empty}%)",
+            f"{self._cnt_empty_tables} going to be dropped out of {self._cnt_tables} ({perc_empty}%)",
             end="\n",
         )
         print(
@@ -377,7 +397,8 @@ class SchemaManager:
         )
 
     def drop_empty_tables(self):
-        """Drops empty tables in a selected schema"""
+        """Drops empty tables in a selected schema
+        Use this with caution and check if the attribute .dict_of_tables has some non empty tables"""
 
         for table, val in self.dict_of_tables.items():
             if val == 0:
