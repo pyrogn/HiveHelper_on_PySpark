@@ -9,6 +9,7 @@ from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 from funs import read_table
+from exceptions import EmptyDFException, ExtraColumnsException
 
 DICT_PRINT_MAX_LEN = 15
 
@@ -56,7 +57,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             "{:<25} {:,}".format(string + ":", val)
         )
 
-        self._introduction_checks()
+        self._sanity_checks()
 
     def __print_dict(self, dictionary, attr_name, *args, **kwargs):
         if len(dictionary) <= DICT_PRINT_MAX_LEN:
@@ -65,7 +66,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print(f"dictionary is too large ({len(dictionary)} > {DICT_PRINT_MAX_LEN})")
             print(f"You can access the dictionary in the attribute {attr_name}")
 
-    def _introduction_checks(self):
+    def _sanity_checks(self):
         """_summary_
 
 
@@ -75,6 +76,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         if self.pk:
             self.__check_cols_entry(self.pk, self.df.columns)
+        if len(self.df.head(1)) == 0:
+            raise EmptyDFException("DF is empty")
 
     def get_info(self):
         """_summary_
@@ -330,7 +333,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self.dummy2,
         )
 
-        diff_results_dict = {} # main dict with results
+        diff_results_dict = {}  # main dict with results
         if self._common_cols:  # Calculate stats of common columns excluding PK
             self.df_with_errors = self.df_with_errors.withColumn(
                 "sum_errors",
@@ -383,7 +386,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     def __check_cols_entry(self, cols_subset, cols_all):
         extra_columns = set(cols_subset) - set(cols_all)
         if extra_columns:
-            raise Exception(
+            raise ExtraColumnsException(
                 f"columns {extra_columns} do not present in the provided cols: {cols_all}"
             )
 
