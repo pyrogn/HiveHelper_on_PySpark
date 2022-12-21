@@ -163,15 +163,35 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print("no NULL values in selected or all null columns")
 
     def _analyze_pk(self):
-        cnt_all = self.df.count()
+
+        df_temp = (
+            self.df.groupBy(self.pk)
+            .agg(F.count(F.lit(1)).alias("cnt_pk"))
+            .groupBy("cnt_pk")
+            .agg(F.count(F.lit(1)).alias("cnt_of_counts"))
+            .cache()
+        )
+        cnt_all = (
+            df_temp.withColumn("cnt_restored", col("cnt_pk") * col("cnt_of_counts"))
+            .agg(F.sum("cnt_restored").alias("cnt_all"))
+            .collect()[0]["cnt_all"]
+        ) or 0
 
         cnt_unique_pk = cnt_with_duplicates_pk = 0
+
         if self.pk:
-            df_grouped = self.df.groupBy(self.pk)
+            cnt_unique_pk = (
+                df_temp.agg(F.sum("cnt_of_counts").alias("unique_pk")).collect()[0][
+                    "unique_pk"
+                ]
+                or 0
+            )
 
-            cnt_unique_pk = df_grouped.count().count()
-
-            cnt_with_duplicates_pk = df_grouped.count().filter(col("count") > 1).count()
+            cnt_with_duplicates_pk = (
+                df_temp.filter(col("cnt_pk") > 1)
+                .agg(F.sum("cnt_of_counts").alias("pk_with_duplicates"))
+                .collect()[0]["pk_with_duplicates"]
+            ) or 0
 
             if cnt_with_duplicates_pk:
                 window_duplicates_pk = W.partitionBy(self.pk)
@@ -196,18 +216,23 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self._print_stats("Unique PK count", self.pk_stats[1])
             self._print_stats("PK with duplicates", self.pk_stats[2])
 
-    def compare_tables(self, df_ref:DataFrame):
-        """_summary_
+    def compare_tables(self, df_ref: DataFrame):
+        """Comparing two tables based on `pk` from main class
+        ! I should consider breaking down this huge method
 
         Args:
-            df_ref (DataFrame): _description_
+            df_ref (DataFrame): second DF (reference DF)
+
+            pk (inherited)
 
         Raises:
             Exception: _description_
             Exception: _description_
 
-        Returns:
-            _type_: _description_
+        Results:
+
+        Attrs maybe:
+
         """
         if not self.pk:
             raise Exception("No PK have been provided")
@@ -271,7 +296,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             *map(put_postfix_columns, common_cols, ["ref"] * len(common_cols)),
             *columns_diff_postfix,
             dummy1,
-            dummy2
+            dummy2,
         )
 
         diff_results_dict = {}
@@ -337,6 +362,9 @@ class SchemaManager:
 
     """
     Class drops empty tables where there are 0 records or table folder doesn't exist
+
+    !fix that you don't read views
+    describe formatted schema.table where Type != 'VIEW'
     """
 
     def __init__(self, schema: str = "default"):

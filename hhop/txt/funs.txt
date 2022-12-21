@@ -7,7 +7,7 @@ from typing import List, Set, Tuple
 
 def read_table(
     schema_table: str,
-    columns: (List | Set | Tuple) = "all",
+    columns: List[str] = "all",
     verbose: bool = False,
     alias: str = None,
     cnt_files: bool = False,
@@ -93,7 +93,7 @@ def write_table(
     schema: str = "default",
     mode: str = "overwrite",
     format_files: str = "parquet",
-    partition_cols: (List | Set | Tuple) = [],
+    partition_cols: List[str] = [],
 ):
     """This function saves a DF to Hive using common default values
 
