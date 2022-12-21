@@ -362,9 +362,6 @@ class SchemaManager:
 
     """
     Class drops empty tables where there are 0 records or table folder doesn't exist
-
-    !fix that you don't read views
-    describe formatted schema.table where Type != 'VIEW'
     """
 
     def __init__(self, schema: str = "default"):
@@ -376,12 +373,27 @@ class SchemaManager:
         )
 
     def _cnt_list_tables(self):
-        self._list_of_tables = (
-            spark.sql(f"show tables in {self.schema}")
-            .select("tableName")
-            .rdd.flatMap(lambda x: x)
-            .collect()
-        )
+        def get_list_of_tables(type_of_table):
+            dict_table_view = {
+                "table": ["tables", "tableName"],
+                "view": ["views", "viewName"],
+            }
+            show_arg, colname = (
+                dict_table_view[type_of_table][0],
+                dict_table_view[type_of_table][1],
+            )
+            tables = (
+                spark.sql(f"show {show_arg} in {self.schema}")
+                .select(colname)
+                .rdd.flatMap(lambda x: x)
+                .collect()
+            )
+            return set(tables)
+
+        self._list_of_tables_all = get_list_of_tables("table")
+        self._list_of_views = get_list_of_tables("view")
+
+        self._list_of_tables = self._list_of_tables_all - self._list_of_views
         self._cnt_tables = len(self._list_of_tables)
         self.dict_of_tables = dict.fromkeys(self._list_of_tables, 1)
 
