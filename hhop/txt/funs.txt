@@ -45,18 +45,12 @@ def read_table(
         else:
             print("there are no partition columns")
 
-        # table_location
+        # table_location + count parquet files
     if cnt_files:
         __analyze_table_location(
             schema_table=schema_table, is_partitioned=len(_part_cols) > 0
         )
     return df
-
-
-# for looking at files in HDFS
-hadoop = sc._jvm.org.apache.hadoop
-fs = hadoop.fs.FileSystem
-conf = hadoop.conf.Configuration()
 
 
 def __analyze_table_location(schema_table, is_partitioned):
@@ -74,8 +68,7 @@ def __analyze_table_location(schema_table, is_partitioned):
 
     try:
         cnt_files = int(cnt_files_raw.split("\n")[-1].strip())
-        print(f"{cnt_files} parquet files in the location:")
-        print(table_location)
+        print(f"{cnt_files} parquet files in the specified above location")
 
     except Exception as e:
         print("Error in count files. Check command output:")
@@ -94,7 +87,7 @@ def write_table(
     mode: str = "overwrite",
     format_files: str = "parquet",
     partition_cols: List[str] = [],
-):
+) -> DataFrame:
     """This function saves a DF to Hive using common default values
 
     Args:
