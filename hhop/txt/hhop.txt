@@ -330,7 +330,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self.dummy2,
         )
 
-        diff_results_dict = {}
+        diff_results_dict = {} # main dict with results
         if self._common_cols:  # Calculate stats of common columns excluding PK
             self.df_with_errors = self.df_with_errors.withColumn(
                 "sum_errors",
@@ -443,7 +443,7 @@ class SchemaManager:
         perc_empty = round(self._cnt_empty_tables / self._cnt_tables * 100, 2)
 
         print(
-            f"{self._cnt_empty_tables} going to be dropped out of {self._cnt_tables} ({perc_empty}%)",
+            f"{self._cnt_empty_tables} tables going to be dropped out of {self._cnt_tables} ({perc_empty}%)",
             end="\n",
         )
         print(

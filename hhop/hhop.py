@@ -443,7 +443,7 @@ class SchemaManager:
         perc_empty = round(self._cnt_empty_tables / self._cnt_tables * 100, 2)
 
         print(
-            f"{self._cnt_empty_tables} going to be dropped out of {self._cnt_tables} ({perc_empty}%)",
+            f"{self._cnt_empty_tables} tables going to be dropped out of {self._cnt_tables} ({perc_empty}%)",
             end="\n",
         )
         print(
