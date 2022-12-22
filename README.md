@@ -1,5 +1,9 @@
 # HiveHelper_on_PySpark
- Very specific, but time-saving library
+ A very specific, but time-saving library for analyzing Hive tables using PySpark.
+
+It is tested on
+1. PySpark 3.2.1 and PySpark 3.1.2
+2. Hive 3.1.3
 
 
 ## Features
@@ -83,7 +87,8 @@ df_main.compare_tables(df_ref)
 # 4 
 # analyzing results
 # filter for finding an exact difference in column
-df_matching_errors.filter(col('var1_is_diff') == 1).select('var1_is_diff', 'var1_main', 'var1_ref').show()
+df_matching_errors.filter(col('var1_is_diff') == 1)\
+    .select('var1_is_diff', 'var1_main', 'var1_ref').show()
 
 # +------------+---------+--------------+
 # |var1_is_diff|var1_main|      var1_ref|
@@ -169,7 +174,7 @@ Writes DataFrame to Hive.
 This function uses PySpark `.write` method, but with common defaults.
 
 ```python
-# Mandatory parameters are DF and name of the table
+# Mandatory parameters are DF and name of the table. Other are optional
 write_table(df.coalesce(1), 'test_writing_2', schema='default', partition_cols=['index', 'var1'], mode='overwrite', format_files='parquet')
 # DF saved as default.test_writing_2
 
