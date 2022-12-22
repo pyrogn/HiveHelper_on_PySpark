@@ -3,6 +3,9 @@ import subprocess
 from spark_init import pyspark, spark, sc, col
 from pyspark.sql import DataFrame
 from typing import List, Set, Tuple
+from exceptions import ExtraColumnsException
+
+DEFAULT_SCHEMA_WRITE = "default"
 
 
 def read_table(
@@ -15,14 +18,17 @@ def read_table(
     """Function for fast reading a table from Hive
 
     Args:
-        schema_table (str): _description_
-        columns (List  |  Set  |  Tuple, optional): _description_. Defaults to "all".
-        verbose (bool, optional): _description_. Defaults to False.
-        alias (str, optional): _description_. Defaults to None.
-        cnt_files (bool, optional): _description_. Defaults to False.
+        schema_table (str): Full name of Hive table. Example: 'default.my_table'
+        columns (List  |  Set  |  Tuple, optional): List of columns to select from Hive table.
+            Defaults to "all".
+        verbose (bool, optional): Check to get .printSchema() of the table.
+            Defaults to False.
+        alias (str, optional): Alias of the DF to use. Defaults to None.
+        cnt_files (bool, optional): Check to get number of parquet files in the location.
+            Only possible to get with attr: verbose=True. Defaults to False.
 
     Returns:
-        DataFrame: _description_
+        DataFrame: PySpark DataFrame from Hive
     """
     df = spark.sql(f"select * from {schema_table}")
 
@@ -47,13 +53,17 @@ def read_table(
 
         # table_location + count parquet files
     if cnt_files:
-        __analyze_table_location(
-            schema_table=schema_table, is_partitioned=len(_part_cols) > 0
-        )
+        __analyze_table_location(schema_table=schema_table)
     return df
 
 
-def __analyze_table_location(schema_table, is_partitioned):
+def __analyze_table_location(schema_table: str):
+    """
+    Function finds a table location and counts number of parquet files
+
+    Args:
+        schema_table (str): Name of the table. Example: 'default.my_table'
+    """
     describe_table = spark.sql(f"describe formatted {schema_table}")
     table_location = (
         describe_table.filter(col("col_name") == "Location")
@@ -76,35 +86,44 @@ def __analyze_table_location(schema_table, is_partitioned):
         print(e)
 
 
-def union_all(*dfs):
+def union_all(*dfs) -> DataFrame:
+    """
+    Shortcut function to union many tables
+
+    Example: union_all(df1, df2, df3, df4)
+
+    Returns:
+        DataFrame: unioned DataFrame
+    """
     return reduce(DataFrame.unionByName, dfs)
 
 
 def write_table(
     df: DataFrame,
     table: str,
-    schema: str = "default",
+    schema: str = DEFAULT_SCHEMA_WRITE,
     mode: str = "overwrite",
     format_files: str = "parquet",
     partition_cols: List[str] = [],
 ) -> DataFrame:
-    """This function saves a DF to Hive using common default values
+    """
+    This function saves a DF to Hive using common default values
 
     Args:
-        df (DataFrame): _description_
-        table (str): _description_
-        schema (str, optional): _description_. Defaults to "default".
-        mode (str, optional): _description_. Defaults to "overwrite".
-        format_files (str, optional): _description_. Defaults to "parquet".
-        partition_cols (List  |  Set  |  Tuple, optional): _description_. Defaults to [].
+        df (DataFrame): DataFrame to write to Hive
+        table (str): Name of the table (without schema)
+        schema (str, optional): Name of the schema. Defaults to DEFAULT_SCHEMA_WRITE in this file.
+        mode (str, optional): Mode to write (overwrite or append). Defaults to "overwrite".
+        format_files (str, optional): Format of files in HDFS. Defaults to "parquet".
+        partition_cols (List  |  Set  |  Tuple, optional): Partitioned columns of the table. Defaults to [].
 
     Raises:
-        Exception: _description_
+        ExtraColumnsException: raised if partition columns are not in the DF
     """
     df_save = df.write.mode(mode).format(format_files)
 
     if set(partition_cols) - set(df.columns):
-        raise Exception(
+        raise ExtraColumnsException(
             f"{set(partition_cols) - set(df.columns)} are not in columns of provided DF"
         )
 

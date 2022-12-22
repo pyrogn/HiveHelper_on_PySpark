@@ -9,9 +9,8 @@ from pyspark.sql.window import Window as W
 
 spark = (
     SparkSession.builder.config("spark.sql.catalogImplementation", "hive")
-# https://sparkbyexamples.com/spark/spark-adaptive-query-execution/
-    .appName("app")
-    .getOrCreate()
+    # https://sparkbyexamples.com/spark/spark-adaptive-query-execution/ for Spark 3
+    .appName("app").getOrCreate()
 )
 
 sc = spark.sparkContext

@@ -136,5 +136,6 @@ Args
 - [x] Finish Extra: reading from Hive, writing to Hive
 - [x] Validate on a Production cluster
 - [x] Breaking down big methods and reducing duplication
+- [x] Add rounding float numbers in comparing tables
 - [ ] Good documentation
-- [ ] Add custom Exceptions
+- [ ] Add tests at the bottom of demo.ipynb
