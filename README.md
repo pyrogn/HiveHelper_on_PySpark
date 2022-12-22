@@ -8,7 +8,7 @@ It is tested on
 
 ## Features
 1. Getting info about a table based on primary key and NULL values in columns
-2. Comparing a table with a reference table by PK
+2. Comparing a table with a reference table by Primary Key (PK)
 3. Getting info about schemas and tables in a schema. Cleaning old tables.
 4. Validating and getting stats on a table.
 5. Simplifying operations like reading, writing Hive tables.
@@ -25,9 +25,9 @@ It is tested on
 
 This class helps you
 
-1. Getting info about PK of one DF
+1. Getting info about Primary Key of one DF
 2. Getting info about NULL columns of one DF
-3. Comparing two tables based on PK
+3. Comparing two tables based on Primary Key
 
 ```python
 # 1 check PK and non PK columns
