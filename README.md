@@ -19,9 +19,11 @@
 
 ### DFExtender
 
-Description  
+This class helps you
 
-Available methods:
+1. Getting info about PK of one DF
+2. Getting info about NULL columns of one DF
+3. Comparing two tables based on PK
 
 ```python
 # 1 check PK and non PK columns
@@ -78,6 +80,8 @@ df_main.compare_tables(df_ref)
 
 # Use DF in attribute `.df_with_errors` for further analysis
 
+# 4 
+# analyzing results
 # filter for finding an exact difference in column
 df_matching_errors.filter(col('var1_is_diff') == 1).select('var1_is_diff', 'var1_main', 'var1_ref').show()
 
@@ -87,14 +91,25 @@ df_matching_errors.filter(col('var1_is_diff') == 1).select('var1_is_diff', 'var1
 # |           1|   value1|       value19|
 # |           1|     null|value_not_null|
 # +------------+---------+--------------+
+
+# columns only present in Reference DF
+(
+    df_matching_errors
+    .filter(col('is_joined_main').isNull())
+    .select('pk1', 'pk2', 'is_joined_main', 'is_joined_ref', 'var1_main', 'var1_ref')
+).show()
+
+# +----+---+--------------+-------------+---------+--------+
+# | pk1|pk2|is_joined_main|is_joined_ref|var1_main|var1_ref|
+# +----+---+--------------+-------------+---------+--------+
+# |key2|  5|          null|            1|     null|  value1|
+# +----+---+--------------+-------------+---------+--------+
 ```
 
 ### SchemaManager
 
-Description
-
-Available methods: 
-
+This class helps cleaning a database that has a lot of empty tables.
+Empty tables for example might be created because of bulk dropping of huge files in HDFS.
 ```python
 # 1
 popular_schema = SchemaManager('popular_schema')
@@ -117,12 +132,50 @@ popular_schema.drop_empty_tables()
 ## Useful functions
 
 ### union_all
-Description
-Args
+
+Makes union of more than 2 tables
+
+```python 
+df_unioned = union_all(df1, df2, df3, df4)
+# or 
+list_df = [df1, df2, df3, df4]
+df_unioned = union_all(*list_df)
+```
 ### read_table
-Description
-Args
-### write_table?
+
+Helps reading a Hive table with additional information
+
+```python
+df = read_table('default.part_table_test1', verbose=True, cnt_files=True)
+
+# root
+#  |-- index: string (nullable = true)
+#  |-- pk1: string (nullable = true)
+#  |-- pk2: string (nullable = true)
+#  |-- var1: string (nullable = true)
+#  |-- var2: string (nullable = true)
+#  |-- dt_part: string (nullable = true)
+#  |-- group_part: string (nullable = true)
+
+# partition columns: ['dt_part', 'group_part']
+                                                                                
+# Running command: hdfs dfs -ls -R file:/Users/pyro/github/HiveHelper_on_PySpark/spark-warehouse/part_table_test1 | grep '.parquet' | wc -l
+# 9 parquet files in the specified above location
+```
+
+### write_table
+
+Writes DataFrame to Hive.
+This function uses PySpark `.write` method, but with common defaults.
+
+```python
+# Mandatory parameters are DF and name of the table
+write_table(df.coalesce(1), 'test_writing_2', schema='default', partition_cols=['index', 'var1'], mode='overwrite', format_files='parquet')
+# DF saved as default.test_writing_2
+
+# it is same as
+df.coalesce(1).write.partitionBy(['index', 'var1']).mode('overwrite').saveAsTable('default.test_writing_1')
+```
 
 
 ### TODO

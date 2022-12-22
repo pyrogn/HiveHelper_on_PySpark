@@ -15,7 +15,7 @@ from exceptions import EmptyDFException, ExtraColumnsException
 # lower if output of errors is too long
 # set higher if you need longer dictionary to pring
 DICT_PRINT_MAX_LEN = 15
-SCALE_OF_NUMBER_COMPARING = 2
+SCALE_OF_NUMBER_IN_COMPARING = 2
 
 
 class DFExtender(pyspark.sql.dataframe.DataFrame):
@@ -434,7 +434,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             ]
         if numeric_cols:
             for c in df.columns:
-                df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_COMPARING))
+                df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_IN_COMPARING))
         return df
 
 

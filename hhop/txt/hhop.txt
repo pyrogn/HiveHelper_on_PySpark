@@ -15,7 +15,7 @@ from exceptions import EmptyDFException, ExtraColumnsException
 # lower if output of errors is too long
 # set higher if you need longer dictionary to pring
 DICT_PRINT_MAX_LEN = 15
-SCALE_OF_NUMBER_COMPARING = 2
+SCALE_OF_NUMBER_IN_COMPARING = 2
 
 
 class DFExtender(pyspark.sql.dataframe.DataFrame):
@@ -239,7 +239,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print("no NULL values in selected or all null columns")
 
     def compare_tables(self, df_ref: DataFrame):
-        """Comparing two tables based on `pk` from main class
+        """Comparing two tables based on `pk` attribute
+        It has two parts:
+            1. Comparing and printing errors in non PK columns
+            2. Comparing errors in PK attributes
+        Every time you are given a DF with errors to analyze by yourself
 
         Args:
             df_ref (DataFrame): second DF (reference DF)
@@ -249,10 +253,10 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         Raises:
             Exception: Provide Primary Key for tables
 
-        Results:
-
-        Attrs maybe:
-
+        Attrs:
+            dict_cols_with_errors - dictionary with count of errors in non PK attributes
+            df_with_errors - df with errors. 
+                It is not cached, write to Hive or cache it with filters!
         """
         if not self.pk:
             raise Exception("No PK is provided")
@@ -430,7 +434,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             ]
         if numeric_cols:
             for c in df.columns:
-                df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_COMPARING))
+                df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_IN_COMPARING))
         return df
 
 
