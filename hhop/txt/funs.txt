@@ -3,7 +3,7 @@ import subprocess
 from spark_init import pyspark, spark, sc, col
 from pyspark.sql import DataFrame
 from typing import List, Set, Tuple
-from exceptions import ExtraColumnsException
+from exceptions import HhopException
 
 DEFAULT_SCHEMA_WRITE = "default"
 
@@ -118,12 +118,12 @@ def write_table(
         partition_cols (List  |  Set  |  Tuple, optional): Partitioned columns of the table. Defaults to [].
 
     Raises:
-        ExtraColumnsException: raised if partition columns are not in the DF
+        HhopException: raised if partition columns are not in the DF
     """
     df_save = df.write.mode(mode).format(format_files)
 
     if set(partition_cols) - set(df.columns):
-        raise ExtraColumnsException(
+        raise HhopException(
             f"{set(partition_cols) - set(df.columns)} are not in columns of provided DF"
         )
 

@@ -5,19 +5,18 @@ It is tested on
 1. PySpark 3.2.1 and PySpark 3.1.2
 2. Hive 3.1.3
 
-
 ## Features
-1. Getting info about a table based on primary key and NULL values in columns
-2. Comparing a table with a reference table by Primary Key (PK)
-3. Getting info about schemas and tables in a schema. Cleaning old tables.
+1. Getting info about a table based on Primary Key (PK) and count NULL values in columns
+2. Comparing a table with a reference table by PK
+3. Getting info about tables in a schema. Dropping empty tables.
 4. Validating and getting stats on a table.
 5. Simplifying operations like reading, writing Hive tables.
 
-## Demonstration of features
-
-### [Demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
+## [Full demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
 
 ### [Code](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop)
+
+[Code in txt for bypassing email firewall](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop/txt)
 
 ## Classes
 
@@ -30,7 +29,7 @@ This class helps you
 3. Comparing two tables based on Primary Key
 
 ```python
-# 1 check PK and non PK columns
+# 1 checks for PK and non PK columns
 df_check = DFExtender(df, pk=['pk1', 'pk2'], verbose=True)
 df_check.get_info()
 
@@ -46,8 +45,20 @@ df_check.get_info()
 # {'pk1': [2, 0.2222], 'pk2': [2, 0.2222], 'var1': [1, 0.1111], 'var2': [1, 0.1111]}
 # Use method `.get_df_with_null(List[str])` to get a df with specified NULL columns
 
-
 # 2
+# finding rows with duplicates by PK sorted by a number of duplicates in descending order
+df_check_pk = df_check.df_duplicates_pk.cache()
+df_check_pk.show()
+
+# +-----+----+---+------+--------+----------+----------+------+
+# |index| pk1|pk2|  var1|    var2|   dt_part|group_part|cnt_pk|
+# +-----+----+---+------+--------+----------+----------+------+
+# |    1|key1|  1|value1|value2_1|2022-12-15|    group1|     2|
+# |    2|key1|  1|value1|value2_1|2022-12-16|    group2|     2|
+# +-----+----+---+------+--------+----------+----------+------+
+
+
+# 3
 # this method returns a DF sorted by count of nulls in selected columns in descending order
 df_check_null = df_check.get_df_with_null(['var1', 'var2'])
 df_check_null.show()
@@ -59,8 +70,8 @@ df_check_null.show()
 # |    6|key2|  4|value1|    null|2022-12-19|    group3|        1|
 # +-----+----+---+------+--------+----------+----------+---------+
 
-# 3
-# Comparing tables
+# 4
+# Comparing 2 DataFrames by PK
 df_main = DFExtender(df, pk=['pk1', 'pk2'], verbose=True)
 df_main.compare_tables(df_ref)
 
@@ -84,9 +95,11 @@ df_main.compare_tables(df_ref)
 
 # Use DF in attribute `.df_with_errors` for further analysis
 
-# 4 
-# analyzing results
+# 5
+# analyzing results of tables comparison
 # filter for finding an exact difference in column
+df_matching_errors = df_main.df_with_errors.cache()
+
 df_matching_errors.filter(col('var1_is_diff') == 1)\
     .select('var1_is_diff', 'var1_main', 'var1_ref').show()
 
@@ -114,7 +127,7 @@ df_matching_errors.filter(col('var1_is_diff') == 1)\
 ### SchemaManager
 
 This class helps cleaning a database that has a lot of empty tables.
-Empty tables for example might be created because of bulk dropping of huge files in HDFS.
+Empty tables for example might be created because of bulk dropping huge files in HDFS.
 ```python
 # 1
 popular_schema = SchemaManager('popular_schema')
@@ -138,7 +151,7 @@ popular_schema.drop_empty_tables()
 
 ### union_all
 
-Makes union of more than 2 tables
+Makes union of more than 2 tables. Meanwhile native Spark function `.unionByName()` or `.union()` allows unioning of only two tables at once.
 
 ```python 
 df_unioned = union_all(df1, df2, df3, df4)
@@ -148,7 +161,7 @@ df_unioned = union_all(*list_df)
 ```
 ### read_table
 
-Helps reading a Hive table with additional information
+This function helps reading a Hive table with additional information
 
 ```python
 df = read_table('default.part_table_test1', verbose=True, cnt_files=True)
@@ -174,7 +187,8 @@ Writes DataFrame to Hive.
 This function uses PySpark `.write` method, but with common defaults.
 
 ```python
-# Mandatory parameters are DF and name of the table. Other are optional
+# Mandatory parameters are DF and a name of the table. Other are optional
+
 write_table(df.coalesce(1), 'test_writing_2', schema='default', partition_cols=['index', 'var1'], mode='overwrite', format_files='parquet')
 # DF saved as default.test_writing_2
 
@@ -195,5 +209,5 @@ df.coalesce(1).write.partitionBy(['index', 'var1']).mode('overwrite').saveAsTabl
 - [x] Validate on a Production cluster
 - [x] Breaking down big methods and reducing duplication
 - [x] Add rounding float numbers in comparing tables
-- [ ] Good documentation
+- [x] Good documentation
 - [ ] Add tests at the bottom of demo.ipynb

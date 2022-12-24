@@ -10,7 +10,7 @@ import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 from pyspark.sql.types import NumericType
 from funs import read_table
-from exceptions import EmptyDFException, ExtraColumnsException
+from exceptions import HhopException
 
 # lower if output of errors is too long
 # set higher if you need longer dictionary to pring
@@ -99,7 +99,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         if self.pk:
             self.__check_cols_entry(self.pk, self.df.columns)
         if len(self.df.head(1)) == 0:
-            raise EmptyDFException("DF is empty")
+            raise HhopException("DF is empty")
 
     def get_info(self):
         """Methods returns statistics about DF
@@ -204,7 +204,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             null_columns (list, optional): Columns . Defaults to [].
 
         Raises:
-            ExtraColumnsException: Provide only columns to null_columns that are present in the DF
+            HhopException: Provide only columns to null_columns that are present in the DF
 
         Returns:
             pyspark.sql.dataframe.DataFrame:
@@ -239,7 +239,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print("no NULL values in selected or all null columns")
 
     def compare_tables(self, df_ref: DataFrame):
-        """Comparing two tables based on `pk` attribute
+        """
+        Comparing two tables based on `pk` attribute
         It has two parts:
             1. Comparing and printing errors in non PK columns
             2. Comparing errors in PK attributes
@@ -255,13 +256,22 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         Attrs:
             dict_cols_with_errors - dictionary with count of errors in non PK attributes
-            df_with_errors - df with errors. 
-                It is not cached, write to Hive or cache it with filters!
+            df_with_errors - df with errors.
+                All numeric columns in DFs get rounded with scale specified in
+                    SCALE_OF_NUMBER_IN_COMPARING
+                Added attributes:
+                    is_joined_main - 1 if this PK in main DF, NULL otherwise
+                    is_joined_ref - 1 if this PK in reference DF, NULL otherwise
+                    is_diff_[column name] - 1 if column differs between Main and Ref DF
+                        otherwise 0
+                    sum_errors - sum of all errors in a row. Doesn't exist 
+                        if there are no errors in non PK attributes.
+                It is not cached, write it to Hive or cache it with filters!
         """
         if not self.pk:
-            raise Exception("No PK is provided")
+            raise HhopException("No PK is provided")
         if self.df is df_ref:
-            raise Exception("Two DFs are the same objects, create a new one")
+            raise HhopException("Two DFs are the same objects, create a new one")
 
         self.df_ref = df_ref
 
@@ -272,9 +282,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print(name)
             df._print_pk_stats()
             print()
-            # rounding in any numeric columns so they don't considered errors by machine rounding
 
-        self.df, self.df_ref = map(self.__round_numberic_cols_df, [self.df, self.df_ref])
+        # rounding in any numeric columns so they don't considered errors because of machine rounding
+        self.df, self.df_ref = map(
+            self.__round_numberic_cols_df, [self.df, self.df_ref]
+        )
 
         df1_cols = set(self.df.columns)
         df2_cols = set(self.df_ref.columns)
@@ -349,6 +361,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         self.df_with_errors = df_with_errors.selectExpr(
             *self.pk,
+            self.dummy1,
+            self.dummy2,
             *map(
                 put_postfix_columns,
                 self._common_cols,
@@ -358,8 +372,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 put_postfix_columns, self._common_cols, ["ref"] * len(self._common_cols)
             ),
             *self.columns_diff_postfix,
-            self.dummy1,
-            self.dummy2,
         )
 
         diff_results_dict = {}  # main dict with results
@@ -424,14 +436,14 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         """
         extra_columns = set(cols_subset) - set(cols_all)
         if extra_columns:
-            raise ExtraColumnsException(
-                f"columns {extra_columns} do not present in the provided cols: {cols_all}"
+            raise HhopException(
+                f"columns {extra_columns} are not present in the provided cols: {cols_all}"
             )
 
     def __round_numberic_cols_df(self, df):
         numeric_cols = [
-                f.name for f in df.schema.fields if isinstance(f.dataType, NumericType)
-            ]
+            f.name for f in df.schema.fields if isinstance(f.dataType, NumericType)
+        ]
         if numeric_cols:
             for c in df.columns:
                 df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_IN_COMPARING))
@@ -507,9 +519,6 @@ class SchemaManager:
 
         print(
             f"{self._cnt_empty_tables} tables going to be dropped out of {self._cnt_tables} ({perc_empty}%)",
-            end="\n",
-        )
-        print(
             "Data about tables is stored in an attribute '.dict_of_tables':",
             "\n",
             "1 - has data, 0 - doesn't and going to be deleted",

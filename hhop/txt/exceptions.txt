@@ -1,6 +1,2 @@
-class EmptyDFException(Exception):
-    pass
-
-
-class ExtraColumnsException(Exception):
+class HhopException(Exception):
     pass
