@@ -15,6 +15,7 @@ from exceptions import HhopException
 # lower if output of errors is too long
 # set higher if you need longer dictionary to pring
 DICT_PRINT_MAX_LEN = 15
+# fraction digits to round in method compare_tables()
 SCALE_OF_NUMBER_IN_COMPARING = 2
 
 
@@ -447,13 +448,19 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 f"columns {extra_columns} are not present in provided columns: {cols_all}"
             )
 
-    def __round_numberic_cols_df(self, df):
-        """round only numeric columns in DF"""
+    def __round_numberic_cols_df(
+        self, df, fraction_digits=SCALE_OF_NUMBER_IN_COMPARING
+    ):
+        """
+        round only numeric columns in DF
+        param:
+            fraction_digits - change to get different rounding of numeric columns
+        """
         numeric_cols = [
             f.name for f in df.schema.fields if isinstance(f.dataType, NumericType)
         ]
         for c in numeric_cols:
-            df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_IN_COMPARING))
+            df = df.withColumn(c, F.round(c, fraction_digits))
         return df
 
 
