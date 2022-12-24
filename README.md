@@ -12,11 +12,15 @@ It is tested on
 4. Validating and getting stats on a table.
 5. Simplifying operations like reading, writing Hive tables.
 
-## [Full demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
+## Quick links
+
+### [Full demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
 
 ### [Code](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop)
 
 [Code in txt for bypassing email firewall](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop/txt)
+
+[Email for any suggestions](mailto:2point71828182846@gmail.com?subject=hhop) - 2point71828182846@gmail.com
 
 ## Classes
 
@@ -143,6 +147,11 @@ popular_schema.find_empty_tables()
 # run drop_empty_tables() on instance to drop empty tables in popular_schema
 
 # 3
+# dict of tables
+popular_schema.dict_of_tables
+# {'table2': 0, 'table1': 1, 'table3': 0}
+
+# 4
 popular_schema.drop_empty_tables()
 # After dropping tables there are 1 tables in popular_schema
 ```
@@ -210,4 +219,4 @@ df.coalesce(1).write.partitionBy(['index', 'var1']).mode('overwrite').saveAsTabl
 - [x] Breaking down big methods and reducing duplication
 - [x] Add rounding float numbers in comparing tables
 - [x] Good documentation
-- [ ] Add tests at the bottom of demo.ipynb
+- [x] Add tests at the bottom of demo.ipynb

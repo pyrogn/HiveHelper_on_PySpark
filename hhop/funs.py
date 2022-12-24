@@ -25,7 +25,7 @@ def read_table(
             Defaults to False.
         alias (str, optional): Alias of the DF to use. Defaults to None.
         cnt_files (bool, optional): Check to get number of parquet files in the location.
-            Only possible to get with attr: verbose=True. Defaults to False.
+            Defaults to False.
 
     Returns:
         DataFrame: PySpark DataFrame from Hive
@@ -51,7 +51,7 @@ def read_table(
         else:
             print("there are no partition columns")
 
-        # table_location + count parquet files
+    # table_location + count parquet files
     if cnt_files:
         __analyze_table_location(schema_table=schema_table)
     return df

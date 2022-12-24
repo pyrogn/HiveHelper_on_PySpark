@@ -40,7 +40,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         pk: List[str] = [],
         verbose: bool = False,
     ) -> DataFrame:
-        """_summary_
+        """Initialization
         
         Args:
             df (pyspark.sql.dataframe.DataFrame): DataFrame to use for analysis
@@ -173,6 +173,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 .collect()[0]["pk_with_duplicates"]
             ) or 0
 
+            # it is possible to rewrite using data from previous calculations
+            # so we don't groupby second time. Would only require filter and order
+            # but is it a big optimization?
             if cnt_with_duplicates_pk:
                 window_duplicates_pk = W.partitionBy(self.pk)
                 self.df_duplicates_pk = (
@@ -197,11 +200,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self._print_stats("Unique PK count", self.pk_stats[1])
             self._print_stats("PK with duplicates", self.pk_stats[2])
 
-    def get_df_with_null(self, null_columns=[]):
+    def get_df_with_null(self, null_columns: List[str] = []):
         """This method calculates and returns DF with selected cols that have NULL values
 
         Args:
-            null_columns (list, optional): Columns . Defaults to [].
+            null_columns (list, optional): Columns as list of string. Defaults to [].
 
         Raises:
             HhopException: Provide only columns to null_columns that are present in the DF
@@ -264,7 +267,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                     is_joined_ref - 1 if this PK in reference DF, NULL otherwise
                     is_diff_[column name] - 1 if column differs between Main and Ref DF
                         otherwise 0
-                    sum_errors - sum of all errors in a row. Doesn't exist 
+                    sum_errors - sum of all errors in a row. Doesn't exist
                         if there are no errors in non PK attributes.
                 It is not cached, write it to Hive or cache it with filters!
         """
@@ -359,6 +362,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             """Helps distinguish columns with the same name but different alias of table"""
             return f"{table}.{column} as {column}_{table}"
 
+        # may be I should reorder this: col1_ref, col1_main, col1_diff, col_next_ref...
         self.df_with_errors = df_with_errors.selectExpr(
             *self.pk,
             self.dummy1,
@@ -424,8 +428,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         cnt_results = []
         for condition in self._cases_full_join.values():
             res = df_cnt_pk_errors.filter(condition).select("count").collect()
+            if res:
+                res_int = res[0]["count"]
+            else:
+                res_int = 0
 
-            res_int = res[0]["count"] or 0  # 0 if such a case doesn't exist
             cnt_results.append(res_int)
 
         return cnt_results
@@ -437,16 +444,16 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         extra_columns = set(cols_subset) - set(cols_all)
         if extra_columns:
             raise HhopException(
-                f"columns {extra_columns} do not present in the provided cols: {cols_all}"
+                f"columns {extra_columns} are not present in provided columns: {cols_all}"
             )
 
     def __round_numberic_cols_df(self, df):
+        """round only numeric columns in DF"""
         numeric_cols = [
             f.name for f in df.schema.fields if isinstance(f.dataType, NumericType)
         ]
-        if numeric_cols:
-            for c in df.columns:
-                df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_IN_COMPARING))
+        for c in numeric_cols:
+            df = df.withColumn(c, F.round(c, SCALE_OF_NUMBER_IN_COMPARING))
         return df
 
 
