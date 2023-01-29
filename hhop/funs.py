@@ -57,33 +57,51 @@ def read_table(
     return df
 
 
+def get_table_location(schema_table: str):
+    """You pass name of a Hive table
+    Funtction returns HDFS address of a table if it exists"""
+
+    try:
+        describe_table = spark.sql(f"describe formatted {schema_table}")
+
+        table_location = (
+            describe_table.filter(col("col_name") == "Location")
+            .select("data_type")
+            .rdd.flatMap(lambda x: x)
+            .collect()[0]
+        )
+        return table_location
+
+    except:
+        return None
+
+
 def __analyze_table_location(schema_table: str):
+
     """
     Function finds a table location and counts number of parquet files
-
     Args:
         schema_table (str): Name of the table. Example: 'default.my_table'
     """
-    describe_table = spark.sql(f"describe formatted {schema_table}")
-    table_location = (
-        describe_table.filter(col("col_name") == "Location")
-        .select("data_type")
-        .rdd.flatMap(lambda x: x)
-        .collect()[0]
-    )
 
-    shell_command = f"hdfs dfs -ls -R {table_location} | grep '.parquet' | wc -l"
-    cnt_files_raw = subprocess.getoutput(shell_command)
-    print(f"Running command: {shell_command}")
+    table_location = get_table_location(schema_table)
 
-    try:
-        cnt_files = int(cnt_files_raw.split("\n")[-1].strip())
-        print(f"{cnt_files} parquet files in the specified above location")
+    if table_location:
+        shell_command = f"hdfs dfs -ls -R {table_location} | grep '.parquet' | wc -l"
+        cnt_files_raw = subprocess.getoutput(shell_command)
+        print(f"Running command: {shell_command}")
 
-    except Exception as e:
-        print("Error in count files. Check command output:")
-        print(cnt_files_raw)
-        print(e)
+        try:
+            cnt_files = int(cnt_files_raw.split("\n")[-1].strip())
+            print(f"{cnt_files} parquet files in the specified above location")
+
+        except Exception as e:
+            print("Error in count files. Check command output:")
+            print(cnt_files_raw)
+            print(e)
+
+    else:
+        print(f"table {schema_table} is not found")
 
 
 def union_all(*dfs) -> DataFrame:
@@ -109,6 +127,9 @@ def write_table(
     """
     This function saves a DF to Hive using common default values
 
+    Exception: If you get error that HDFS location already exists, then try to remove files using:
+    hdfs dfs -rm -f -r {hdfs location in the error}
+
     Args:
         df (DataFrame): DataFrame to write to Hive
         table (str): Name of the table (without schema)
@@ -120,7 +141,15 @@ def write_table(
     Raises:
         HhopException: raised if partition columns are not in the DF
     """
-    df_save = df.write.mode(mode).format(format_files)
+    location_if_exists = get_table_location(f"{schema}.{table}")
+
+    df_save = df.write
+
+    if location_if_exists:
+        # it allows to rewrite files if location of to-be-written table is not empty
+        df_save = df_save.option("path", location_if_exists)
+
+    df_save = df_save.mode(mode).format(format_files)
 
     if set(partition_cols) - set(df.columns):
         raise HhopException(
