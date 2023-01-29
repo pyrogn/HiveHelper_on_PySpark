@@ -31,8 +31,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         get_info - information about the DF (PK + NULL info)
         get_df_with_null - get a DF with NULLs in provided columns
         compare_tables - compare two tables based on PK
-
-    !Class is not tested on complex types as array and struct!
     """
 
     def __init__(
@@ -174,9 +172,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 .collect()[0]["pk_with_duplicates"]
             ) or 0
 
-            # it is possible to rewrite using data from previous calculations
-            # so we don't groupby second time. Would only require filter and order
-            # but is it a big optimization?
             if cnt_with_duplicates_pk:
                 window_duplicates_pk = W.partitionBy(self.pk)
                 self.df_duplicates_pk = (
@@ -295,6 +290,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         df1_cols = set(self.df.columns)
         df2_cols = set(self.df_ref.columns)
         self._common_cols = (df1_cols & df2_cols) - set(self.pk)
+        self._df1_extracols = df1_cols - self._common_cols - set(self.pk)
+        self._df2_extracols = df2_cols - self._common_cols - set(self.pk)
 
         self.diff_postfix, self.sum_postfix = "_is_diff", "_sum_error"
         self.columns_diff_postfix = [
@@ -338,10 +335,16 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         print("\nCount stats of matching main and reference tables:")
         for key, val in dict(zip(self._cases_full_join.keys(), cnt_results)).items():
             print("{:<25} {:,}".format(key + ":", val))
-        self.v_print(f"\nUse DF in attribute `.df_with_errors` for further analysis")
+        self.v_print(
+            (
+                "\nUse DF in attribute `.df_with_errors` for further analysis\n"
+                "You can find alternative ordering of columns in attr .columns_diff_reordered_all"
+            )
+        )
 
     def __compare_calc_diff(self):
-        """Calculating difference in non PK columns"""
+        """Calculating difference in non PK columns
+        Creates DF in attribute .df_with_errors to use it for manual analysis"""
 
         def add_column_is_diff(df, column):
             """Filter for detecting differences in non PK attributes"""
@@ -359,15 +362,22 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         df_with_errors = reduce(add_column_is_diff, self._common_cols, self._df_joined)
 
-        def put_postfix_columns(column, table):
-            """Helps distinguish columns with the same name but different alias of table"""
-            return f"{table}.{column} as {column}_{table}"
+        def put_postfix_columns(column, table, expr=True):
+            """Helps distinguish columns with the same name but different alias of table
+            Add attr .columns_diff_reordered_all to use alternative ordering of columns"""
+            if expr:
+                return f"{table}.{column} as {column}_{table}"
+            else:
+                return f"{column}_{table}"
 
-        # may be I should reorder this: col1_ref, col1_main, col1_diff, col_next_ref...
-        self.df_with_errors = df_with_errors.selectExpr(
+        basic_diff_columns = (
             *self.pk,
             self.dummy1,
             self.dummy2,
+        )
+
+        self.df_with_errors = df_with_errors.selectExpr(
+            *basic_diff_columns,
             *map(
                 put_postfix_columns,
                 self._common_cols,
@@ -377,6 +387,44 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 put_postfix_columns, self._common_cols, ["ref"] * len(self._common_cols)
             ),
             *self.columns_diff_postfix,
+            # to include all columns from both DF, including not shared attrs
+            *map(
+                put_postfix_columns,
+                self._df1_extracols,
+                ["main"] * len(self._df1_extracols),
+            ),
+            *map(
+                put_postfix_columns,
+                self._df2_extracols,
+                ["ref"] * len(self._df2_extracols),
+            ),
+        )
+
+        common_cols_grouped = []
+        for column in self._common_cols:
+            new_modified_columns = [
+                put_postfix_columns(column, "main", expr=False),
+                put_postfix_columns(column, "ref", expr=False),
+                column + self.diff_postfix,
+            ]
+            common_cols_grouped.extend(new_modified_columns)
+
+        self.columns_diff_reordered_all = (
+            # col1_ref, col1_main, col1_diff... This may be easier to read
+            *basic_diff_columns,
+            *common_cols_grouped,
+            *map(
+                put_postfix_columns,
+                self._df1_extracols,
+                ["main"] * len(self._df1_extracols),
+                [False] * len(self._df1_extracols)
+            ),
+            *map(
+                put_postfix_columns,
+                self._df2_extracols,
+                ["ref"] * len(self._df2_extracols),
+                [False] * len(self._df1_extracols)
+            ),
         )
 
         diff_results_dict = {}  # main dict with results
