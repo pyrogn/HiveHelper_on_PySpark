@@ -513,6 +513,72 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         return df
 
 
+class TablePartitionDescriber:
+    """The class helps to get partitions of partitioned Hive table
+    in a readable and ready-to-use format
+
+    Methods:
+        get_partitions_parsed: returns parsed DF like 'show partitions'
+        get_max_value_from_partitions: return max value of the selected partition column
+    """
+
+    def __init__(self, schema_table: str):
+        """
+        Args:
+            schema_table (str): Hive table. Example: 'default.my_table'
+        Raise:
+            Exception if the table doesn't have partitions
+        """
+        self.schema_table = schema_table
+        part_cols = self.__get_partitioned_cols()
+        parsed_part_cols = self.__get_mapping_for_part_cols(part_cols, "partitions")
+        self.df_partitions = (
+            spark.sql(f"show partitions {schema_table}")
+            .select(F.split("partition", "/").alias("partitions"))
+            .select(*parsed_part_cols)
+        )
+
+    def __get_partitioned_cols(self):
+        """Returs list of partitioned columns"""
+        schema_name, table_name = self.schema_table.split(".")
+        cols = spark.catalog.listColumns(tableName=table_name, dbName=schema_name)
+        part_cols = [col.name for col in cols if col.isPartition == True]
+        if not part_cols:
+            print(f"The table {self.schema_table} doesn't have partitions")
+            raise HhopException
+        return part_cols
+
+    def __get_mapping_for_part_cols(self, part_cols: list, splitted_col: str):
+        """Returns correctly parsed columns for result DF
+        Args:
+            part_cols: list of partitioned columns
+            splitted_col: name of column with splitted by '/' partitions
+        """
+        return [
+            F.split(col(splitted_col)[num], "=")[1].alias(part_col)
+            for num, part_col in enumerate(part_cols)
+        ]
+
+    def get_partitions_parsed(self):
+        """Returns DF with all partitions from metadata"""
+        return self.df_partitions
+
+    def get_max_value_from_partitions(self, col_name: str, prefilter=None):
+        """Find max value of partitioned column
+        Args:
+            col_name: column name to apply max function
+            prefiler: (optional) apply filter by another partitions before finding max value
+        """
+        col_name_dummy = "last_val"
+        df_partitions = self.df_partitions
+        if prefilter is not None:
+            df_partitions = df_partitions.filter(prefilter)
+        max_val = df_partitions.select(F.max(col_name).alias(col_name_dummy)).first()[
+            col_name_dummy
+        ]
+        return max_val
+
+
 class SchemaManager:
     """
     Class drops empty tables where there are 0 records or table folder doesn't exist

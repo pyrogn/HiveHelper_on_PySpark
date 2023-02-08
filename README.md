@@ -128,6 +128,42 @@ df_matching_errors.filter(col('var1_is_diff') == 1)\
 # +----+---+--------------+-------------+---------+--------+
 ```
 
+### TablePartitionDescriber
+The class helps to get partitions of partitioned Hive table in a readable and ready-to-use format
+
+```python
+# 1
+table_partitions = TablePartitionDescriber('default.part_table_test1')
+table_partitions_got = table_partitions.get_partitions_parsed()
+table_partitions_got.show(100, False)
+
+# +----------+----------+
+# |dt_part   |group_part|
+# +----------+----------+
+# |2022-12-15|group1    |
+# |2022-12-16|group2    |
+# |2022-12-16|group3    |
+# |2022-12-17|group1    |
+# |2022-12-18|group2    |
+# |2022-12-19|group3    |
+# |2022-12-19|group4    |
+# |2022-12-20|group3    |
+# |2022-12-20|group7    |
+# +----------+----------+
+
+# 2
+max_dt = table_partitions.get_max_value_from_partitions('dt_part')
+print(max_dt)
+# '2022-12-20'
+
+# 3
+prefilter = col('group_part') == 'group1'
+max_dt_group = table_partitions.get_max_value_from_partitions('dt_part', prefilter=prefilter)
+print(max_dt_group)
+# '2022-12-17'
+```
+
+
 ### SchemaManager
 
 This class helps cleaning a database that has a lot of empty tables.
