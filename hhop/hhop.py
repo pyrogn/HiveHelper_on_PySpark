@@ -519,7 +519,9 @@ class TablePartitionDescriber:
 
     Methods:
         get_partitions_parsed: returns parsed DF like 'show partitions'
-        get_max_value_from_partitions: return max value of the selected partition column
+        get_max_value_from_partitions: return max value of the selected partition column,
+            might include prefilter for a 'show partitions' table
+        cast_col_types: change types of columns from 'show partitions'
     """
 
     def __init__(self, schema_table: str):
@@ -537,6 +539,15 @@ class TablePartitionDescriber:
             .select(F.split("partition", "/").alias("partitions"))
             .select(*parsed_part_cols)
         )
+
+    def cast_col_types(self, dict_types: dict = None):
+        """dict_types - dictionary with columns and corresponding new types
+        It will only change types IN PLACE, no new or deleted columns
+        example: {'dt_part': 'int', 'engine_id': 'bigint'}"""
+        for key, value in dict_types.items():
+            self.df_partitions = self.df_partitions.withColumn(
+                key, col(key).cast(value)
+            )
 
     def __get_partitioned_cols(self):
         """Returs list of partitioned columns"""

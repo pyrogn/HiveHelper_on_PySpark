@@ -20,7 +20,7 @@ It is tested on
 
 [Code in txt for bypassing email firewall](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop/txt)
 
-[Email for any suggestions](mailto:2point71828182846@gmail.com?subject=hhop) - 2point71828182846@gmail.com
+Email for any suggestions - 2point71828182846@gmail.com
 
 ## Classes
 
@@ -161,6 +161,11 @@ prefilter = col('group_part') == 'group1'
 max_dt_group = table_partitions.get_max_value_from_partitions('dt_part', prefilter=prefilter)
 print(max_dt_group)
 # '2022-12-17'
+
+# extra
+# You may want to change types of column in a table 'table_partitions_got' like in the example but still use a method .get_max_value_from_partitions()
+# For this action use in-place method .cast_col_types() like:
+# table_partitions_got.cast_col_types({'dt_part': 'date'})
 ```
 
 
