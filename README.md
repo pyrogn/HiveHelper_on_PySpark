@@ -126,6 +126,25 @@ df_matching_errors.filter(col('var1_is_diff') == 1)\
 # +----+---+--------------+-------------+---------+--------+
 # |key2|  5|          null|            1|     null|  value1|
 # +----+---+--------------+-------------+---------+--------+
+
+# 6
+# There is an option to alternative order of columns in .df_with_errors attribute
+# Use it this way. It might be easier to read
+alt_order_cols = df_main.columns_diff_reordered_all
+(
+    df_matching_errors
+    .select(*alt_order_cols)
+    .filter(col('var1_is_diff') == 1)
+).show()
+
+# +----+---+--------------+-------------+------------+-----------+---------------+----------+---------+-------------+---------+--------+------------+---------------+--------------+------------------+---------+--------------+------------+
+# | pk1|pk2|is_joined_main|is_joined_ref|dt_part_main|dt_part_ref|dt_part_is_diff|index_main|index_ref|index_is_diff|var2_main|var2_ref|var2_is_diff|group_part_main|group_part_ref|group_part_is_diff|var1_main|      var1_ref|var1_is_diff|
+# +----+---+--------------+-------------+------------+-----------+---------------+----------+---------+-------------+---------+--------+------------+---------------+--------------+------------------+---------+--------------+------------+
+# |key1|  1|             1|            1|  2022-12-15| 2022-12-15|              0|         1|        1|            0| value2_1|value2_1|           0|         group2|        group7|                 1|   value1|       value19|           1|
+# |key2|  1|             1|            1|  2022-12-17| 2022-12-17|              0|         4|        4|            0| value2_1|value2_1|           0|         group1|       group10|                 1|     null|value_not_null|           1|
+# +----+---+--------------+-------------+------------+-----------+---------------+----------+---------+-------------+---------+--------+------------+---------------+--------------+------------------+---------+--------------+------------+
+
+
 ```
 
 ### TablePartitionDescriber
@@ -165,7 +184,7 @@ print(max_dt_group)
 # extra
 # You may want to change types of column in a table 'table_partitions_got' like in the example but still use a method .get_max_value_from_partitions()
 # For this action use in-place method .cast_col_types() like:
-# table_partitions_got.cast_col_types({'dt_part': 'date'})
+table_partitions_got.cast_col_types({'dt_part': 'date'})
 ```
 
 
@@ -239,12 +258,40 @@ This function uses PySpark `.write` method, but with common defaults.
 ```python
 # Mandatory parameters are DF and a name of the table. Other are optional
 
-write_table(df.coalesce(1), 'test_writing_2', schema='default', partition_cols=['index', 'var1'], mode='overwrite', format_files='parquet')
+write_table(df.repartition(1), 'test_writing_2', schema='default', partition_cols=['index', 'var1'], mode='overwrite', format_files='parquet')
 # DF saved as default.test_writing_2
 
 # it is same as
-df.coalesce(1).write.partitionBy(['index', 'var1']).mode('overwrite').saveAsTable('default.test_writing_1')
+df.repartition(1).write.format('parquet').partitionBy(['index', 'var1']).mode('overwrite').saveAsTable('default.test_writing_1')
 ```
+
+### deduplicate_df
+
+Function makes a new DF based on pk and order of non-PK columns with deduplication using `row_number()`
+
+```python
+df.show()
+# +-----+----+---+------+--------+----------+----------+
+# |index| pk1|pk2|  var1|    var2|   dt_part|group_part|
+# +-----+----+---+------+--------+----------+----------+
+# |    1|key1|  1|value1|value2_1|2022-12-15|    group2|
+# |    2|key1|  2|value1|value2_1|2022-12-16|    group2|
+# |    3|key1|  3|value1|value2_1|2022-12-16|    group3|
+# |    5|key2|  2|value1|value2_1|2022-12-18|    group2|
+# |    4|key2|  1|  null|value2_1|2022-12-17|    group1|
+# |    6|key2|  3|value1|    null|2022-12-20|    group3|
+# +-----+----+---+------+--------+----------+----------+
+
+df_dedup = deduplicate_df(df, pk=['pk1'], order_by_cols=[col('dt_part').desc(), col('group_part')])
+
+df_dedup.show()
+# +-----+----+---+------+--------+----------+----------+
+# |index| pk1|pk2|  var1|    var2|   dt_part|group_part|
+# +-----+----+---+------+--------+----------+----------+
+# |    2|key1|  2|value1|value2_1|2022-12-16|    group2|
+# |    6|key2|  3|value1|    null|2022-12-20|    group3|
+# +-----+----+---+------+--------+----------+----------+
+``` 
 
 
 ### TODO

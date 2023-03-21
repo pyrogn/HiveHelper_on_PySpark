@@ -9,7 +9,7 @@ from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 from pyspark.sql.types import NumericType
-from funs import read_table
+from funs import read_table, make_set_lower
 from exceptions import HhopException
 
 # lower if output of errors is too long
@@ -54,7 +54,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self.df = df
         self.verbose = verbose
 
-        super().__init__(self.df._jdf, self.df.sql_ctx)
+        super().__init__(
+            self.df._jdf, self.df.sql_ctx
+        )  # magic to integrate pyspark DF into this class
 
         # get sorted dict with count + share without zero values
         self._get_sorted_dict = lambda dict, val: {
@@ -100,66 +102,79 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         if len(self.df.head(1)) == 0:
             raise HhopException("DF is empty")
 
-    def get_info(self):
-        """Methods returns statistics about DF
+    def get_info(self, pk_stats=True, null_stats=True):
+        """Methods returns statistics about DF.
 
         1. If PK is provided there will be statistics on PK duplicates
         2. Statistics about NULL values in columns
+
+        Params:
+            pk_stats: if True, calculate stats on Primary Key
+            null_stats: if True, calculate stats on NULL values in a table
 
         Attrs:
             dict_null_in_cols
             df_duplicates_pk (optional) (from method _analyze_pk)
             df_with_nulls (optional) (from method get_df_with_null)
         """
-        self._analyze_pk()
-        self._print_pk_stats()
+        cnt_all = None
+        if pk_stats and self.pk:
+            self._analyze_pk()
+            self._print_pk_stats()
 
-        cnt_all = self.pk_stats[0]
+            cnt_all = self.pk_stats[0]
 
-        dict_null = (
-            self.df.select(
-                [F.count(F.when(col(c).isNull(), c)).alias(c) for c in self.df.columns]
+        if cnt_all is None and null_stats:
+            cnt_all = self.df.count()
+
+        if null_stats:
+            dict_null = (
+                self.df.select(
+                    [
+                        F.count(F.when(col(c).isNull(), c)).alias(c)
+                        for c in self.df.columns
+                    ]
+                )
+                .rdd.collect()[0]
+                .asDict()
             )
-            .rdd.collect()[0]
-            .asDict()
-        )
-        self.dict_null_in_cols = self._get_sorted_dict(dict_null, cnt_all)
+            self.dict_null_in_cols = self._get_sorted_dict(dict_null, cnt_all)
 
-        if self.pk and self.verbose:
-            for key in self.pk:
-                if key in self.dict_null_in_cols:
-                    print(f"PK column '{key}' contains empty values, be careful!")
+            print(f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:")
+            self.__print_dict(self.dict_null_in_cols, "dict_null_in_cols")
 
-        print(f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:")
-        self.__print_dict(self.dict_null_in_cols, "dict_null_in_cols")
+            self.v_print(
+                f"Use method `.get_df_with_null(List[str])` to get a df with specified NULL columns"
+            )
 
-        self.v_print(
-            f"Use method `.get_df_with_null(List[str])` to get a df with specified NULL columns"
-        )
+            if self.pk and pk_stats and self.verbose:
+                for key in self.pk:
+                    if key in self.dict_null_in_cols:
+                        print(f"PK column '{key}' contains empty values, be careful!")
 
     def _analyze_pk(self):
         """
-        Attr:
+        Method analizes DF based on provided PK
+        Computed attrs:
             pk_stats - [Count all, Unique PK count, PK with duplicates]
             df_duplicates_pk (optional) - DF with PK duplicates if there are any
         """
-
-        df_temp = (
-            self.df.groupBy(self.pk)
-            .agg(F.count(F.lit(1)).alias("cnt_pk"))
-            .groupBy("cnt_pk")
-            .agg(F.count(F.lit(1)).alias("cnt_of_counts"))
-            .cache()
-        )
-        cnt_all = (
-            df_temp.withColumn("cnt_restored", col("cnt_pk") * col("cnt_of_counts"))
-            .agg(F.sum("cnt_restored").alias("cnt_all"))
-            .collect()[0]["cnt_all"]
-        ) or 0
-
-        cnt_unique_pk = cnt_with_duplicates_pk = 0
-
         if self.pk:
+            df_temp = (
+                self.df.groupBy(self.pk)
+                .agg(F.count(F.lit(1)).alias("cnt_pk"))
+                .groupBy("cnt_pk")
+                .agg(F.count(F.lit(1)).alias("cnt_of_counts"))
+                .cache()
+            )
+            cnt_all = (
+                df_temp.withColumn("cnt_restored", col("cnt_pk") * col("cnt_of_counts"))
+                .agg(F.sum("cnt_restored").alias("cnt_all"))
+                .collect()[0]["cnt_all"]
+            ) or 0
+
+            cnt_unique_pk = cnt_with_duplicates_pk = 0
+
             cnt_unique_pk = (
                 df_temp.agg(F.sum("cnt_of_counts").alias("unique_pk")).collect()[0][
                     "unique_pk"
@@ -181,13 +196,15 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                     .filter(col("cnt_pk") > 1)
                     .orderBy([col("cnt_pk").desc(), *[col(i) for i in self.pk]])
                 )
+
                 self.v_print(
                     f"You can access DF with PK duplicates in an attribute `.df_duplicates_pk`\n"
                 )
+
+            # 0 - cnt rows, 1 - Unique PK, 2 - PK with duplicates
+            self.pk_stats = [cnt_all, cnt_unique_pk, cnt_with_duplicates_pk]
         else:
-            self.v_print(f"PK hasn't been provided!\n")
-        # 0 - cnt rows, 1 - Unique PK, 2 - PK with duplicates
-        self.pk_stats = [cnt_all, cnt_unique_pk, cnt_with_duplicates_pk]
+            HhopException("PK hasn't been provided!\n")
 
     def _print_pk_stats(self):
         """Method only prints stats"""
@@ -338,7 +355,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self.v_print(
             (
                 "\nUse DF in attribute `.df_with_errors` for further analysis\n"
-                "You can find alternative ordering of columns in attr .columns_diff_reordered_all"
+                "You can find alternative order of columns in attr .columns_diff_reordered_all"
             )
         )
 
@@ -411,7 +428,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         self.columns_diff_reordered_all = (
             # col1_ref, col1_main, col1_diff... This may be easier to read
-            # however common_cols is python's set and it loses an order
+            # however common_cols is python's set and it loses order
             *basic_diff_columns,
             *common_cols_grouped,
             *map(
@@ -491,7 +508,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         """
         Raise exception if provided columns are not in DF
         """
-        extra_columns = set(cols_subset) - set(cols_all)
+
+        extra_columns = make_set_lower(cols_subset) - make_set_lower(cols_all)
+
         if extra_columns:
             raise HhopException(
                 f"columns {extra_columns} are not present in provided columns: {cols_all}"

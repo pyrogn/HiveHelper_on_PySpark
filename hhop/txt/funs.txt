@@ -1,6 +1,8 @@
 from functools import reduce
 import subprocess
 from spark_init import pyspark, spark, sc, col
+import pyspark.sql.functions as F
+from pyspark.sql.window import Window as W
 from pyspark.sql import DataFrame
 from typing import List, Set, Tuple
 from exceptions import HhopException
@@ -88,8 +90,8 @@ def __analyze_table_location(schema_table: str):
 
     if table_location:
         shell_command = f"hdfs dfs -ls -R {table_location} | grep '.parquet' | wc -l"
-        cnt_files_raw = subprocess.getoutput(shell_command)
         print(f"Running command: {shell_command}")
+        cnt_files_raw = subprocess.getoutput(shell_command)
 
         try:
             cnt_files = int(cnt_files_raw.split("\n")[-1].strip())
@@ -97,8 +99,8 @@ def __analyze_table_location(schema_table: str):
 
         except Exception as e:
             print("Error in count files. Check command output:")
-            print(cnt_files_raw)
             print(e)
+            print(cnt_files_raw)
 
     else:
         print(f"table {schema_table} is not found")
@@ -116,6 +118,10 @@ def union_all(*dfs) -> DataFrame:
     return reduce(DataFrame.unionByName, dfs)
 
 
+def make_set_lower(iterable):
+    return {i.lower() for i in iterable}
+
+
 def write_table(
     df: DataFrame,
     table: str,
@@ -123,6 +129,7 @@ def write_table(
     mode: str = "overwrite",
     format_files: str = "parquet",
     partition_cols: List[str] = [],
+    verbose: bool = True,
 ) -> DataFrame:
     """
     This function saves a DF to Hive using common default values
@@ -151,12 +158,30 @@ def write_table(
 
     df_save = df_save.mode(mode).format(format_files)
 
-    if set(partition_cols) - set(df.columns):
-        raise HhopException(
-            f"{set(partition_cols) - set(df.columns)} are not in columns of provided DF"
-        )
+    extra_columns = make_set_lower(partition_cols) - make_set_lower(df.columns)
+    if extra_columns:
+        raise HhopException(f"{extra_columns} are not in columns of provided DF")
 
     if partition_cols:
         df_save = df_save.partitionBy(partition_cols)
     df_save.saveAsTable(f"{schema}.{table}")
-    print(f"DF saved as {schema}.{table}")
+
+    if verbose:
+        print(f"DF saved as {schema}.{table}")
+
+
+def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):
+    """Function to deduplicate DF using row_number function
+    Attrs:
+        df: Spark DF
+        pk: list of future PK columns. Example: ['pk1', 'pk2']
+        order_by_cols: list of columns to do order_by.
+            Example: [col('val1'), col('val2').desc()]
+    """
+    window_rn = W.partitionBy(pk).orderBy(order_by_cols)
+    df_out = (
+        df.withColumn("rn", F.row_number().over(window_rn))
+        .filter(col("rn") == 1)
+        .drop("rn")
+    )
+    return df_out
