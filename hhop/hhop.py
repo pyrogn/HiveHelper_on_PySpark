@@ -41,21 +41,24 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         df: DataFrame,
         pk: List[str] = [],
         verbose: bool = False,
+        custom_null_values: list[str] = ["", "NULL", "null", "Null"],
     ) -> DataFrame:
         """Initialization
-        
+
         Args:
             df (pyspark.sql.dataframe.DataFrame): DataFrame to use for analysis
             pk ((list, tuple, set), optional): Primary Key of the DF. Defaults to None.
-            verbose (bool, optional): Choose if you want to receive additional messages. \
+            verbose (bool, optional): Choose if you want to receive additional messages.
                 Defaults to False.
-        
+            custom_null_values (list[str]) - provide values that will be considered as NULLs in NULLs check
+
         Return:
             DataFrame as provided in call
         """
         self.pk = pk
         self.df = df
         self.verbose = verbose
+        self.custom_null_values = custom_null_values
 
         super().__init__(
             self.df._jdf, self.df.sql_ctx
@@ -74,6 +77,10 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         )
         self._print_stats = lambda string, val: print(
             "{:<25} {:,}".format(string + ":", val)
+        )
+
+        self.cond_col_is_null = lambda c: col(c).isNull() | col(c).isin(
+            self.custom_null_values
         )
 
         self._sanity_checks()
@@ -105,7 +112,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         if len(self.df.head(1)) == 0:
             raise HhopException("DF is empty")
 
-    def get_info(self, pk_stats=True, null_stats=True):
+    def get_info(
+        self,
+        pk_stats=True,
+        null_stats=True,
+    ):
         """Methods returns statistics about DF.
 
         1. If PK is provided there will be statistics on PK duplicates
@@ -134,7 +145,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             dict_null = (
                 self.df.select(
                     [
-                        F.count(F.when(col(c).isNull(), c)).alias(c)
+                        F.count(F.when(self.cond_col_is_null(c), c)).alias(c)
                         for c in self.df.columns
                     ]
                 )
@@ -248,7 +259,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self.df_with_nulls = (
                 self.df.withColumn(
                     "cnt_nulls",
-                    sum(self.df[col].isNull().cast("int") for col in cols_filter),
+                    sum(self.cond_col_is_null(col).cast("int") for col in cols_filter),
                 )
                 .filter(col("cnt_nulls") > 0)
                 .orderBy(col("cnt_nulls").desc())
@@ -384,7 +395,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         def put_postfix_columns(column, table, expr=True):
             """Helps distinguish columns with the same name but different alias of table
-            Add attr .columns_diff_reordered_all to use alternative ordering of columns"""
+            Add attr .columns_diff_reordered_all to use alternative ordering of columns
+            """
             if expr:
                 return f"{table}.{column} as {column}_{table}"
             else:

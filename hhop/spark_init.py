@@ -9,7 +9,7 @@ spark = (
     SparkSession.builder
     .config("spark.ui.showConsoleProgress", "false")
     .config('spark.sql.autobroadcastjointhreshold', -1)
-    # .config("spark.sql.catalogImplementation", "hive")
+    .config("spark.sql.catalogImplementation", "hive")
     # https://sparkbyexamples.com/spark/spark-adaptive-query-execution/ for Spark 3
     .appName(custom_config['app_name']).getOrCreate()
 )

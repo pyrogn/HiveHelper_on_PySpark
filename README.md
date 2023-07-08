@@ -308,3 +308,9 @@ df_dedup.show()
 - [x] Add rounding float numbers in comparing tables
 - [x] Good documentation
 - [x] Add tests at the bottom of demo.ipynb
+- [ ] Add automatic tests outside of .ipynb
+- [ ] Update DFExtender (or other class) to create, validate and join SCD2 tables
+- [x] Include custom values in NULLs check
+- [ ] Add function write_read_table to make checkpoints
+- [ ] Clean up attributes and methods in DFExtender and refactor something
+- [ ] Enable linter and reformat code even more
