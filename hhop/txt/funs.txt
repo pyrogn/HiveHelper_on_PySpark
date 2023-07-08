@@ -180,8 +180,8 @@ def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):
     """
     window_rn = W.partitionBy(pk).orderBy(order_by_cols)
     df_out = (
-        df.withColumn("rn", F.row_number().over(window_rn))
-        .filter(col("rn") == 1)
-        .drop("rn")
+        df.withColumn("_rn", F.row_number().over(window_rn))
+        .filter(col("_rn") == 1)
+        .drop("_rn")
     )
     return df_out
