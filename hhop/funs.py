@@ -1,5 +1,6 @@
 from functools import reduce
 import subprocess
+import inspect
 from typing import List, Set, Tuple
 
 from spark_init import spark
@@ -85,7 +86,6 @@ def get_table_location(schema_table: str):
 
 
 def __analyze_table_location(schema_table: str):
-
     """
     Function finds a table location and counts number of parquet files
     Args:
@@ -191,3 +191,31 @@ def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):
         .drop("_rn")
     )
     return df_out
+
+
+def write_read_table(df_write: DataFrame, *write_args, **write_kwargs) -> DataFrame:
+    """Function for making checkpoints by applying
+    1. write_table with provided write_args and write_kwargs
+    2. read_table with default values
+    """
+    write_table(df_write, *write_args, **write_kwargs)
+
+    func = write_table
+    num_required_args = len(inspect.getfullargspec(func).args) - len(func.__defaults__)
+    default_values = {
+        k: v
+        for k, v in zip(
+            func.__code__.co_varnames[num_required_args:], func.__defaults__
+        )
+    }
+
+    default_values.update(write_kwargs)
+    write_kwargs = default_values
+    write_kwargs.update(
+        zip(write_table.__code__.co_varnames[1:], write_args)
+    )  # first element is DataFrame
+
+    schema_table = f"{write_kwargs['schema']}.{write_kwargs['table']}"
+    df = read_table(schema_table)
+
+    return df
