@@ -188,6 +188,9 @@ table_partitions_got.cast_col_types({'dt_part': 'date'})
 ```
 
 
+### SCD2Helper (WIP)
+
+
 ### SchemaManager
 
 This class helps cleaning a database that has a lot of empty tables.
@@ -265,6 +268,17 @@ write_table(df.repartition(1), 'test_writing_2', schema='default', partition_col
 df.repartition(1).write.format('parquet').partitionBy(['index', 'var1']).mode('overwrite').saveAsTable('default.test_writing_1')
 ```
 
+### write_read_table
+
+Makes a checkpoint of DF by writing to HDFS and reading this table.
+It saves an extra line of doing it in two actions: write_table() and read_table()
+```python
+# Mandatory parameters are DF and table_name
+df_dedup_cp = write_read_table(df_dedup, 'table_name12', schema='test_checkpoint', verbose=1)
+# DF saved as test_checkpoint.table_name12
+```
+
+
 ### deduplicate_df
 
 Function makes a new DF based on pk and order of non-PK columns with deduplication using `row_number()`
@@ -312,5 +326,5 @@ df_dedup.show()
 - [ ] Update DFExtender (or other class) to create, validate and join SCD2 tables
 - [x] Include custom values in NULLs check
 - [x] Add function write_read_table to make checkpoints
-- [ ] Clean up attributes and methods in DFExtender and refactor something
+- [x] Clean up attributes and methods in DFExtender and refactor something
 - [ ] Enable linter and reformat code even more

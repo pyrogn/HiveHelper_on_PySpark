@@ -1,6 +1,5 @@
 from functools import reduce
 from operator import add
-from inspect import cleandoc
 from typing import List
 
 import pyspark
@@ -55,13 +54,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         Return:
             DataFrame as provided in call
         """
-        self.pk = pk
-        self.df = df
-        self.verbose = verbose
-        self.custom_null_values = custom_null_values
+        self._pk = pk
+        self._df = df
+        self._verbose = verbose
+        self._custom_null_values = custom_null_values
 
         super().__init__(
-            self.df._jdf, self.df.sql_ctx
+            self._df._jdf, self._df.sql_ctx
         )  # magic to integrate pyspark DF into this class
 
         # get sorted dict with count + share without zero values
@@ -72,15 +71,15 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         }
 
         # print if verbose = True
-        self.v_print = (
+        self._v_print = (
             lambda *args, **kwargs: print(*args, **kwargs) if verbose else None
         )
         self._print_stats = lambda string, val: print(
             "{:<25} {:,}".format(string + ":", val)
         )
 
-        self.cond_col_is_null = lambda c: col(c).isNull() | col(c).isin(
-            self.custom_null_values
+        self._cond_col_is_null = lambda c: col(c).isNull() | col(c).isin(
+            self._custom_null_values
         )
 
         self._sanity_checks()
@@ -107,9 +106,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             Exception: Provide only columns to pk that are present in the DF
         """
 
-        if self.pk:
-            self.__check_cols_entry(self.pk, self.df.columns)
-        if len(self.df.head(1)) == 0:
+        if self._pk:
+            self.__check_cols_entry(self._pk, self._df.columns)
+        if len(self._df.head(1)) == 0:
             raise HhopException("DF is empty")
 
     def get_info(
@@ -132,21 +131,21 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             df_with_nulls (optional) (from method get_df_with_null)
         """
         cnt_all = None
-        if pk_stats and self.pk:
+        if pk_stats and self._pk:
             self._analyze_pk()
             self._print_pk_stats()
 
             cnt_all = self.pk_stats[0]
 
         if cnt_all is None and null_stats:
-            cnt_all = self.df.count()
+            cnt_all = self._df.count()
 
         if null_stats:
             dict_null = (
-                self.df.select(
+                self._df.select(
                     [
-                        F.count(F.when(self.cond_col_is_null(c), c)).alias(c)
-                        for c in self.df.columns
+                        F.count(F.when(self._cond_col_is_null(c), c)).alias(c)
+                        for c in self._df.columns
                     ]
                 )
                 .rdd.collect()[0]
@@ -157,12 +156,12 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print(f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:")
             self.__print_dict(self.dict_null_in_cols, "dict_null_in_cols")
 
-            self.v_print(
+            self._v_print(
                 f"Use method `.get_df_with_null(List[str])` to get a df with specified NULL columns"
             )
 
-            if self.pk and pk_stats and self.verbose:
-                for key in self.pk:
+            if self._pk and pk_stats and self._verbose:
+                for key in self._pk:
                     if key in self.dict_null_in_cols:
                         print(f"PK column '{key}' contains empty values, be careful!")
 
@@ -173,9 +172,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             pk_stats - [Count all, Unique PK count, PK with duplicates]
             df_duplicates_pk (optional) - DF with PK duplicates if there are any
         """
-        if self.pk:
+        if self._pk:
             df_temp = (
-                self.df.groupBy(self.pk)
+                self._df.groupBy(self._pk)
                 .agg(F.count(F.lit(1)).alias("cnt_pk"))
                 .groupBy("cnt_pk")
                 .agg(F.count(F.lit(1)).alias("cnt_of_counts"))
@@ -202,16 +201,16 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             ) or 0
 
             if cnt_with_duplicates_pk:
-                window_duplicates_pk = W.partitionBy(self.pk)
+                window_duplicates_pk = W.partitionBy(self._pk)
                 self.df_duplicates_pk = (
-                    self.df.withColumn(
+                    self._df.withColumn(
                         "cnt_pk", F.count(F.lit(1)).over(window_duplicates_pk)
                     )
                     .filter(col("cnt_pk") > 1)
-                    .orderBy([col("cnt_pk").desc(), *[col(i) for i in self.pk]])
+                    .orderBy([col("cnt_pk").desc(), *[col(i) for i in self._pk]])
                 )
 
-                self.v_print(
+                self._v_print(
                     f"You can access DF with PK duplicates in an attribute `.df_duplicates_pk`\n"
                 )
 
@@ -223,7 +222,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     def _print_pk_stats(self):
         """Method only prints stats"""
         self._print_stats("Count all", self.pk_stats[0])
-        if self.pk:
+        if self._pk:
             self._print_stats("Unique PK count", self.pk_stats[1])
             self._print_stats("PK with duplicates", self.pk_stats[2])
 
@@ -243,9 +242,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         """
         if not hasattr(self, "dict_null_in_cols"):
             print("Running method .get_info() first", end="\n")
-            self.get_info()
+            self.get_info(pk_stats=False)
 
-        self.__check_cols_entry(null_columns, self.df.columns)
+        self.__check_cols_entry(null_columns, self._df.columns)
 
         if self.dict_null_in_cols:
             if set(null_columns) & set(self.dict_null_in_cols):
@@ -257,9 +256,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 cols_filter = self.dict_null_in_cols.keys()
 
             self.df_with_nulls = (
-                self.df.withColumn(
+                self._df.withColumn(
                     "cnt_nulls",
-                    sum(self.cond_col_is_null(col).cast("int") for col in cols_filter),
+                    sum(self._cond_col_is_null(col).cast("int") for col in cols_filter),
                 )
                 .filter(col("cnt_nulls") > 0)
                 .orderBy(col("cnt_nulls").desc())
@@ -298,35 +297,35 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                         if there are no errors in non PK attributes.
                 It is not cached, write it to Hive or cache it with filters!
         """
-        if not self.pk:
+        if not self._pk:
             raise HhopException("No PK is provided")
-        if self.df is df_ref:
+        if self._df is df_ref:
             raise HhopException("Two DFs are the same objects, create a new one")
 
-        self.df_ref = df_ref
+        self._df_ref = df_ref
 
-        for df, name in zip((self.df, self.df_ref), ("Main DF", "Reference DF")):
+        for df, name in zip((self._df, self._df_ref), ("Main DF", "Reference DF")):
             if not hasattr(df, "pk_stats"):
-                df = DFExtender(df, self.pk, verbose=False)
+                df = DFExtender(df, self._pk, verbose=False)
                 df._analyze_pk()
             print(name)
             df._print_pk_stats()
             print()
 
-        # rounding in any numeric columns so they don't considered errors because of machine rounding
-        self.df, self.df_ref = map(
-            self.__round_numberic_cols_df, [self.df, self.df_ref]
+        # rounding in any numeric columns so diffs don't considered as errors because of machine rounding
+        self._df, self._df_ref = map(
+            self.__round_numberic_cols_df, [self._df, self._df_ref]
         )
 
-        df1_cols = set(self.df.columns)
-        df2_cols = set(self.df_ref.columns)
-        self._common_cols = (df1_cols & df2_cols) - set(self.pk)
-        self._df1_extracols = df1_cols - self._common_cols - set(self.pk)
-        self._df2_extracols = df2_cols - self._common_cols - set(self.pk)
+        df1_cols = set(self._df.columns)
+        df2_cols = set(self._df_ref.columns)
+        self._common_cols = (df1_cols & df2_cols) - set(self._pk)
+        self._df1_extracols = df1_cols - self._common_cols - set(self._pk)
+        self._df2_extracols = df2_cols - self._common_cols - set(self._pk)
 
-        self.diff_postfix, self.sum_postfix = "_is_diff", "_sum_error"
-        self.columns_diff_postfix = [
-            column + self.diff_postfix for column in self._common_cols
+        self._diff_postfix, self._sum_postfix = "_is_diff", "_sum_error"
+        self._columns_diff_postfix = [
+            column + self._diff_postfix for column in self._common_cols
         ]
 
         cols_not_in_main, cols_not_in_ref = df2_cols - df1_cols, df1_cols - df2_cols
@@ -336,23 +335,23 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print(f"cols not in ref: {cols_not_in_ref}")
 
         dummy_column = "is_joined_"
-        self.dummy1, self.dummy2 = dummy_column + "main", dummy_column + "ref"
+        self._dummy1, self._dummy2 = dummy_column + "main", dummy_column + "ref"
 
-        df1 = self.df.withColumn(self.dummy1, F.lit(1)).alias("main")
-        df2 = self.df_ref.withColumn(self.dummy2, F.lit(1)).alias("ref")
+        df1 = self._df.withColumn(self._dummy1, F.lit(1)).alias("main")
+        df2 = self._df_ref.withColumn(self._dummy2, F.lit(1)).alias("ref")
 
-        self._df_joined = df1.join(df2, on=self.pk, how="full")
+        self._df_joined = df1.join(df2, on=self._pk, how="full")
 
         # diff in non PK cols
         # creates as a new attribute self.df_with_errors
         diff_results_dict = self.__compare_calc_diff()
 
         # diff in PK cols
-        cnt_results = self.__compare_calc_pk()
+        self.matching_results = self.__compare_calc_pk()
 
         # cnt of error / count of all correct matching
         self.dict_cols_with_errors = self._get_sorted_dict(
-            diff_results_dict, cnt_results[2]
+            diff_results_dict, self.matching_results[2]
         )
         # printing results
         if not self._common_cols:
@@ -364,9 +363,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             print("There are no errors in non PK columns")
 
         print("\nCount stats of matching main and reference tables:")
-        for key, val in dict(zip(self._cases_full_join.keys(), cnt_results)).items():
+        for key, val in dict(
+            zip(self._cases_full_join.keys(), self.matching_results)
+        ).items():
             print("{:<25} {:,}".format(key + ":", val))
-        self.v_print(
+        self._v_print(
             (
                 "\nUse DF in attribute `.df_with_errors` for further analysis\n"
                 "You can find alternative order of columns in attr .columns_diff_reordered_all"
@@ -381,7 +382,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             """Filter for detecting differences in non PK attributes"""
             cond_diff = f"""case
                 when
-                    ({self.dummy1} is null or {self.dummy2} is null) 
+                    ({self._dummy1} is null or {self._dummy2} is null) 
                     or
                     (main.{column} is null and ref.{column} is null)
                     or 
@@ -389,7 +390,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 then 0
                 else 1
             end"""
-            return df.withColumn(column + self.diff_postfix, F.expr(cond_diff))
+            return df.withColumn(column + self._diff_postfix, F.expr(cond_diff))
 
         df_with_errors = reduce(add_column_is_diff, self._common_cols, self._df_joined)
 
@@ -403,9 +404,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 return f"{column}_{table}"
 
         basic_diff_columns = (
-            *self.pk,
-            self.dummy1,
-            self.dummy2,
+            *self._pk,
+            self._dummy1,
+            self._dummy2,
         )
 
         self.df_with_errors = df_with_errors.selectExpr(
@@ -418,7 +419,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             *map(
                 put_postfix_columns, self._common_cols, ["ref"] * len(self._common_cols)
             ),
-            *self.columns_diff_postfix,
+            *self._columns_diff_postfix,
             # to include all columns from both DF, including not shared attrs
             *map(
                 put_postfix_columns,
@@ -437,7 +438,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             new_modified_columns = [
                 put_postfix_columns(column, "main", expr=False),
                 put_postfix_columns(column, "ref", expr=False),
-                column + self.diff_postfix,
+                column + self._diff_postfix,
             ]
             common_cols_grouped.extend(new_modified_columns)
 
@@ -464,23 +465,23 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         if self._common_cols:  # Calculate stats of common columns excluding PK
             self.df_with_errors = self.df_with_errors.withColumn(
                 "sum_errors",
-                reduce(add, [col(column) for column in self.columns_diff_postfix]),
+                reduce(add, [col(column) for column in self._columns_diff_postfix]),
             )
 
             diff_results = self.df_with_errors.agg(
                 *(
-                    F.sum(col_is_diff + self.diff_postfix).alias(
-                        col_is_diff + self.sum_postfix
+                    F.sum(col_is_diff + self._diff_postfix).alias(
+                        col_is_diff + self._sum_postfix
                     )
                     for col_is_diff in self._common_cols
                 )
             ).collect()[0]
 
             for column in self._common_cols:
-                sum_column = column + self.sum_postfix
+                sum_column = column + self._sum_postfix
                 diff_results_dict[column] = diff_results[sum_column]
         else:
-            self.v_print(
+            self._v_print(
                 "No common columns are found. Results will only contain PK errors"
             )
 
@@ -489,21 +490,21 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     def __compare_calc_pk(self):
         """Calculating difference in PK between 2 tables"""
         df_cnt_pk_errors = (
-            self._df_joined.groupBy(self.dummy1, self.dummy2).count().cache()
+            self._df_joined.groupBy(self._dummy1, self._dummy2).count().cache()
         )
 
         self._cases_full_join = {
             # 0
             "not in main table": (
-                col(self.dummy1).isNull() & col(self.dummy2).isNotNull()
+                col(self._dummy1).isNull() & col(self._dummy2).isNotNull()
             ),
             # 1
             "not in reference table": (
-                col(self.dummy1).isNotNull() & col(self.dummy2).isNull()
+                col(self._dummy1).isNotNull() & col(self._dummy2).isNull()
             ),
             # 2
             "correct matching": (
-                col(self.dummy1).isNotNull() & col(self.dummy2).isNotNull()
+                col(self._dummy1).isNotNull() & col(self._dummy2).isNotNull()
             ),
         }
 
@@ -589,8 +590,9 @@ class TablePartitionDescriber:
         cols = spark.catalog.listColumns(tableName=table_name, dbName=schema_name)
         part_cols = [col.name for col in cols if col.isPartition == True]
         if not part_cols:
-            print(f"The table {self.schema_table} doesn't have partitions")
-            raise HhopException
+            raise HhopException(
+                f"The table {self.schema_table} doesn't have partitions"
+            )
         return part_cols
 
     def __get_mapping_for_part_cols(self, part_cols: list, splitted_col: str):
@@ -719,3 +721,7 @@ class SchemaManager:
         print(
             f"After dropping tables there are {self._cnt_tables} tables in {self.schema}"
         )
+
+
+class SCD2Helper:
+    pass
