@@ -1,10 +1,16 @@
 from functools import reduce
 import subprocess
-from spark_init import pyspark, spark, sc, col
+from typing import List, Set, Tuple
+
+from spark_init import spark
+
+import pyspark
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
-from pyspark.sql import DataFrame
-from typing import List, Set, Tuple
+import pyspark.sql.types as T
+
 from exceptions import HhopException
 
 DEFAULT_SCHEMA_WRITE = "default"

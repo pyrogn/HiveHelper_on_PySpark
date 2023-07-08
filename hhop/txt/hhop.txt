@@ -3,12 +3,15 @@ from operator import add
 from inspect import cleandoc
 from typing import List
 
+import pyspark
 from pyspark.sql import DataFrame
-from spark_init import pyspark, spark
+from spark_init import spark
 from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
+import pyspark.sql.types as T
 from pyspark.sql.types import NumericType
+
 from funs import read_table, make_set_lower
 from exceptions import HhopException
 

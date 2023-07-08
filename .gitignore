@@ -157,3 +157,4 @@ spark-warehouse/**
 *.numbers
 .vscode/**
 .vscode/settings.json
+_spark_configs/*.json
