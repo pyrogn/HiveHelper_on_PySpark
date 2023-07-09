@@ -3,7 +3,7 @@
 from pyspark.sql import SparkSession
 from pass_spark_config import read_spark_config
 
-custom_config = read_spark_config()
+custom_config = read_spark_config(rename_file=False, remove_dir=False)
 
 spark = (
     SparkSession.builder.config("spark.ui.showConsoleProgress", "false")
