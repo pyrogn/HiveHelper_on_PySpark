@@ -49,8 +49,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         df: DataFrame,
         pk: List[str] = None,
         verbose: bool = False,
-        custom_null_values: list[str] = ["", "NULL", "null", "Null"],
         silent_mode: bool = False,
+        custom_null_values: list[str] = ["", "NULL", "null", "Null"],
     ) -> DataFrame:
         """Initialization
 
@@ -60,7 +60,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             verbose (bool, optional): Choose if you want to receive additional messages.
                 Defaults to False.
             custom_null_values (list[str]) - provide values that will be considered as NULLs in NULLs check
-            silent_mode (bool): if true, doesn't print anything. Defaults to True
+            silent_mode (bool): if true, doesn't print anything. Defaults to False
         Return:
             DataFrame as provided in call
         """
@@ -767,32 +767,28 @@ class SchemaManager:
 class SCD2Helper:
     """Class helps to work with SCD2 tables"""
 
-    def __init__(self, df, pk) -> DataFrame:
-        self._pk = pk
-        self._df = df
+    def __init__(self, change_tech_col_names: dict = None) -> DataFrame:
+        self.tech_col_names = {  # for quick change if needed
+            "row_hash": "row_hash",
+            "row_actual_from": "row_actual_from",
+            "row_actual_to": "row_actual_to",
+        }
+        if change_tech_col_names:
+            self.tech_col_names.update(change_tech_col_names)
 
-    def df_to_scd2(self, non_pk_cols, time_col):
+    def df_to_scd2(self, df, pk_cols, non_pk_cols, time_col):
         """
         Create SCD2 DF
         Attrs:
             non_pk_cols (list):
         """
 
-        tech_col_names = {  # for quick change if needed
-            "row_hash": "row_hash",
-            "row_actual_from": "row_actual_from",
-            "row_actual_to": "row_actual_to",
-        }
+        df_cols = df.columns
 
-        def hash_cols(*cols):
-            return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
-
-        df_cols = self._df.columns
-
-        window_pk_asc = W.partitionBy(*self._pk).orderBy(time_col)
+        window_pk_asc = W.partitionBy(*pk_cols).orderBy(time_col)
         df_hash = (
-            self._df.withColumn(
-                "row_hash", hash_cols(*self._pk, *non_pk_cols)
+            df.withColumn(
+                "row_hash", self.hash_cols(*pk_cols, *non_pk_cols)
             )  # hash of pk and essential non pk attributes
             .withColumn("row_actual_from", col(time_col).cast("date"))
             .withColumn(
@@ -804,20 +800,20 @@ class SCD2Helper:
         )
         df_ded_by_version = deduplicate_df(
             df_hash,
-            pk=[*self._pk, "version_num"],
+            pk=[*pk_cols, "version_num"],
             order_by_cols=[
                 time_col
             ],  # first row with same hash with respect to version numbers
         )
         df_ded_by_date = deduplicate_df(
             df_ded_by_version,
-            pk=[*self._pk, "row_actual_from"],
+            pk=[*pk_cols, "row_actual_from"],
             order_by_cols=[F.desc(time_col)],  # last value for every day
         )
 
-        window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
+        window_row_actual_to = W.partitionBy(*pk_cols).orderBy("row_actual_from")
 
-        alias_tech_col_names = lambda x: col(x).alias(tech_col_names[x])
+        alias_tech_col_names = lambda x: col(x).alias(self.tech_col_names[x])
 
         df_result = df_ded_by_date.withColumn(
             "row_actual_to",
@@ -834,14 +830,95 @@ class SCD2Helper:
 
         return df_result
 
-    @classmethod
-    def hash_cols(*cols):
+    def hash_cols(self, *cols):
         return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
 
-    def validate_scd2(
-        self,
-    ):
-        pass
+    def validate_scd2(self, df, pk, non_pk, time_col) -> None:
+        """Validation of a SCD2 table
+        Right now it looks messy, it's going to be better
+
+        Args:
+            df (_type_): _description_
+            pk (_type_): _description_
+            non_pk (_type_): _description_
+            time_col (_type_): _description_
+        """
+        # check on basic key: pk + row_actual_to
+        pk_check_basic = [*pk, "row_actual_to"]
+        self.basic_pk_check = DFExtender(df, pk=pk_check_basic, silent_mode=True)
+        self.basic_pk_check.get_info(null_stats=False)
+        if self.basic_pk_check.pk_stats[2] != 0:
+            print(
+                f"There are {self.basic_pk_check.pk_stats[2]} PK duplicates by {pk_check_basic} "
+                "Look at `.basic_pk_check.df_duplicates_pk`"
+            )
+
+        # check if there are invalid dates in row_actual_(to/from)
+        def is_valid_date(column):
+            return (
+                ~F.upper(column).isin(["", "NULL"])
+                & col(column).rlike("^\d{4}-\d{2}-\d{2}$")
+                & col(column).cast("date").isNotNull()
+            )
+
+        self.df_invalid_dates = (
+            df.withColumn("valid_date_from", is_valid_date("row_actual_from"))
+            .withColumn("valid_date_to", is_valid_date("row_actual_to"))
+            .filter("valid_date_from is False or valid_date_to is false")
+        )
+        cnt_invalid_dates = self.df_invalid_dates.count()
+        if cnt_invalid_dates != 0:
+            print(
+                f"{cnt_invalid_dates} rows with invalid dates, look at `.df_invalid_dates`"
+            )
+
+        # check if version history is broken (overlapping or non continuous)
+        window_continuous_history = W.partitionBy(*pk).orderBy("row_actual_from")
+        self.df_broken_history = df.withColumn(
+            "is_good_history",
+            col("row_actual_to")
+            == F.date_sub(
+                F.lead("row_actual_from").over(window_continuous_history),
+                1,
+            ),
+        ).filter("is_good_history is false")
+        cnt_broken_history = self.df_broken_history.count()
+        if cnt_broken_history != 0:
+            print(
+                f"{cnt_broken_history} rows with invalid history, look at `.df_broken_history`"
+            )
+
+        # check if there are new versions with the same hash (extra version in this case is harmless but wrong)
+        window_pk_asc = W.partitionBy(*pk).orderBy(time_col)
+        df_hash_versions = df.withColumn(
+            "row_hash", self.hash_cols(*pk, *non_pk)
+        ).withColumn(
+            "version_num",
+            F.count(
+                F.when(F.lag("row_hash").over(window_pk_asc) != col("row_hash"), 1)
+            ).over(window_pk_asc),
+        )
+        pk_check_versions = [*pk, "version_num"]
+        self.pk_by_versions = DFExtender(
+            df_hash_versions, pk=pk_check_versions, silent_mode=True
+        )
+        self.pk_by_versions.get_info(null_stats=False)
+        self.pk_by_versions.pk_stats[2] == 0
+        if self.pk_by_versions.pk_stats[2] != 0:
+            print(
+                f"There are {self.pk_by_versions.pk_stats[2]} PK duplicates by {pk_check_versions} "
+                "Look at `.pk_by_versions.df_duplicates_pk`"
+            )
+
+        if (
+            self.basic_pk_check.pk_stats[2] == 0
+            and cnt_invalid_dates == 0
+            and cnt_broken_history == 0
+            and self.pk_by_versions.pk_stats[2] == 0
+        ):
+            print(
+                f"All tests passed, number of records: {self.basic_pk_check.pk_stats[0]:,}"
+            )
 
     def merge_scd2_update(self, df_new):
         pass
