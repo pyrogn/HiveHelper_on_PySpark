@@ -138,6 +138,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             dict_null_in_cols
             df_duplicates_pk (optional) (from method _analyze_pk)
             df_with_nulls (optional) (from method get_df_with_null)
+            pk_stats (optional) - namedtuple with stats on PK
         """
         cnt_all = None
         if pk_stats and self._pk:
@@ -297,6 +298,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         Attrs:
             dict_cols_with_errors - dictionary with count of errors in non PK attributes
             df_with_errors - df with errors.
+            matching_stats - namedtuple with stats on matching by pk columns
+            dict_cols_with_errors - dict with aggregated errors by non-pk columns
                 All numeric columns in DFs get rounded with scale specified in
                     SCALE_OF_NUMBER_IN_COMPARING
                 Added attributes:
