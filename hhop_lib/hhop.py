@@ -12,7 +12,7 @@ import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 from pyspark.sql.types import NumericType
 
-from funs import read_table, make_set_lower
+from funs import read_table, make_set_lower, deduplicate_df
 from exceptions import HhopException
 
 # lower if output of errors is too long
@@ -751,4 +751,82 @@ class SchemaManager:
 class SCD2Helper:
     """Class helps to work with SCD2 tables"""
 
-    pass
+    def __init__(self, df, pk) -> DataFrame:
+        self._pk = pk
+        self._df = df
+
+    def df_to_scd2(self, non_pk_cols, time_col):
+        """
+        Create SCD2 DF
+        Attrs:
+            non_pk_cols (list):
+        """
+
+        tech_col_names = {  # for quick change if needed
+            "row_hash": "row_hash",
+            "row_actual_from": "row_actual_from",
+            "row_actual_to": "row_actual_to",
+        }
+
+        def hash_cols(*cols):
+            return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
+
+        df_cols = self._df.columns
+
+        window_pk_asc = W.partitionBy(*self._pk).orderBy(time_col)
+        df_hash = (
+            self._df.withColumn(
+                "row_hash", hash_cols(*self._pk, *non_pk_cols)
+            )  # hash of pk and essential non pk attributes
+            .withColumn("row_actual_from", col(time_col).cast("date"))
+            .withColumn(
+                "version_num",
+                F.count(
+                    F.when(F.lag("row_hash").over(window_pk_asc) != col("row_hash"), 1)
+                ).over(window_pk_asc),
+            )
+        )
+        df_ded_by_version = deduplicate_df(
+            df_hash,
+            pk=[*self._pk, "version_num"],
+            order_by_cols=[
+                time_col
+            ],  # first row with same hash with respect to version numbers
+        )
+        df_ded_by_date = deduplicate_df(
+            df_ded_by_version,
+            pk=[*self._pk, "row_actual_from"],
+            order_by_cols=[F.desc(time_col)],  # last value for every day
+        )
+
+        window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
+
+        alias_tech_col_names = lambda x: col(x).alias(tech_col_names[x])
+
+        df_result = df_ded_by_date.withColumn(
+            "row_actual_to",
+            F.coalesce(
+                F.date_sub(F.lead("row_actual_from").over(window_row_actual_to), 1),
+                F.lit("9999-12-31"),
+            ),
+        ).select(
+            *df_cols,
+            alias_tech_col_names("row_hash"),
+            alias_tech_col_names("row_actual_from").cast("string"),
+            alias_tech_col_names("row_actual_to").cast("string"),
+        )
+
+        return df_result
+
+    def validate_scd2(
+        self,
+    ):
+        pass
+
+    def merge_scd2_update(self, df_new):
+        pass
+
+    def join_scd2(
+        self,
+    ):
+        pass
