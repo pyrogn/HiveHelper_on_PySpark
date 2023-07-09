@@ -49,6 +49,10 @@ df_check.get_info()
 # {'pk1': [2, 0.2222], 'pk2': [2, 0.2222], 'var1': [1, 0.1111], 'var2': [1, 0.1111]}
 # Use method `.get_df_with_null(List[str])` to get a df with specified NULL columns
 
+# get results in attr like:
+df_check.pk_stats
+# PK_stats(cnt_rows=9, unique_pk_cnt=8, pk_with_duplicates_pk=1)
+
 # 2
 # finding rows with duplicates by PK sorted by a number of duplicates in descending order
 df_check_pk = df_check.df_duplicates_pk.cache()
@@ -98,6 +102,12 @@ df_main.compare_tables(df_ref)
 # correct matching:         5
 
 # Use DF in attribute `.df_with_errors` for further analysis
+
+# you can get result from attrs like:
+df_main.dict_cols_with_errors
+# {'group_part': [2, 0.4], 'var1': [2, 0.4], 'var2': [1, 0.2]}
+df_main.matching_results
+# Compare_tables_pk_stats(not_in_main_table_cnt=1, not_in_ref_table=1, correct_matching_cnt=5)
 
 # 5
 # analyzing results of tables comparison
@@ -189,6 +199,9 @@ table_partitions_got.cast_col_types({'dt_part': 'date'})
 
 
 ### SCD2Helper (WIP)
+
+SCD2Helper helps to create, validate, update and join SCD2 tables
+
 
 
 ### SchemaManager
@@ -323,7 +336,7 @@ df_dedup.show()
 - [x] Good documentation
 - [x] Add tests at the bottom of demo.ipynb
 - [ ] Add automatic tests outside of .ipynb
-- [ ] Update DFExtender (or other class) to create, validate and join SCD2 tables
+- [ ] Create a new class SCD2Helper to create, validate, update and join SCD2 tables
 - [x] Include custom values in NULLs check
 - [x] Add function write_read_table to make checkpoints
 - [x] Clean up attributes and methods in DFExtender and refactor something

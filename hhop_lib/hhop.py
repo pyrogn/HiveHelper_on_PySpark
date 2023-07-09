@@ -1,5 +1,6 @@
 from functools import reduce
 from operator import add
+from collections import namedtuple
 from typing import List
 
 import pyspark
@@ -19,6 +20,14 @@ from exceptions import HhopException
 DICT_PRINT_MAX_LEN = 15
 # fraction digits to round in method compare_tables()
 SCALE_OF_NUMBER_IN_COMPARING = 2
+
+Pk_stats_generator = namedtuple(
+    "PK_stats", "cnt_rows unique_pk_cnt pk_with_duplicates_pk"
+)
+Compare_tables_pk_stats_generator = namedtuple(
+    "Compare_tables_pk_stats",
+    "not_in_main_table_cnt not_in_ref_table correct_matching_cnt",
+)
 
 
 class DFExtender(pyspark.sql.dataframe.DataFrame):
@@ -215,7 +224,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 )
 
             # 0 - cnt rows, 1 - Unique PK, 2 - PK with duplicates
-            self.pk_stats = [cnt_all, cnt_unique_pk, cnt_with_duplicates_pk]
+            self.pk_stats = Pk_stats_generator(
+                *[cnt_all, cnt_unique_pk, cnt_with_duplicates_pk]
+            )
         else:
             HhopException("PK hasn't been provided!\n")
 
@@ -508,6 +519,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             ),
         }
 
+        # TODO: convert this list to collections.namedtuple
         cnt_results = []
         for condition in self._cases_full_join.values():
             res = df_cnt_pk_errors.filter(condition).select("count").collect()
@@ -518,7 +530,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
             cnt_results.append(res_int)
 
-        return cnt_results
+        return Compare_tables_pk_stats_generator(*cnt_results)
 
     def __check_cols_entry(self, cols_subset, cols_all):
         """
