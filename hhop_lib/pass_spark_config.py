@@ -1,5 +1,7 @@
 "this module allows to write a dict to json file and later read it. It is a W/A for passing configs to spark, if other functions rely on the variable spark"
-import os, json, shutil
+import os
+import json
+import shutil
 from datetime import datetime
 
 config_files_dir = os.path.join(os.getcwd(), "_spark_configs")

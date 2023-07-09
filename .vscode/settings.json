@@ -11,5 +11,7 @@
     "python.testing.unittestEnabled": false,
     "python.analysis.extraPaths": [
         "./hhop_lib"
-    ]
+    ],
+    "python.linting.flake8Enabled": false,
+    "python.linting.pylintEnabled": true
 }

@@ -1,11 +1,12 @@
 from os import listdir, getcwd
 from os.path import join, isdir, dirname, basename
 
-hhop_dir_name = "hhop_lib"
+HHOP_DIR_NAME = "hhop_lib"
 
 
 # courtesy of https://stackoverflow.com/questions/49034576/move-up-directory-until-folder-found-python
 def find_hhop_location():
+    """copy paster from SO to find a path with hhop_lib"""
     filepath = None
     # dir of current working directory
     par_dir = getcwd()
@@ -17,11 +18,8 @@ def find_hhop_location():
             if isdir(join(par_dir, d))
         ]
         # the parent contains desired directory
-        if hhop_dir_name in dirs:
+        if HHOP_DIR_NAME in dirs:
             filepath = par_dir
-            return join(filepath, hhop_dir_name)
+            return join(filepath, HHOP_DIR_NAME)
         # back it out another parent otherwise
         par_dir = dirname(par_dir)
-    raise Exception(
-        "cannot found hhop library. Use import os; os.getcwd() to help yourself to find it"
-    )

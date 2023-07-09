@@ -339,5 +339,5 @@ df_dedup.show()
 - [x] Add function write_read_table to make checkpoints
 - [x] Clean up attributes and methods in DFExtender and refactor something
 - [ ] Create a new class SCD2Helper to create, validate, update and join SCD2 tables
-- [ ] Add automatic tests outside of .ipynb
-- [ ] Enable linter and reformat code even more
+- [x] Add automatic tests outside of .ipynb (coverage is very low, so is the available time)
+- [x] Enable linter and reformat code even more

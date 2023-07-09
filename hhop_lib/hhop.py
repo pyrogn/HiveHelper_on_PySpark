@@ -1,3 +1,4 @@
+"main module with helpers"
 from functools import reduce
 from operator import add
 from collections import namedtuple
@@ -9,7 +10,6 @@ from spark_init import spark
 from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
-import pyspark.sql.types as T
 from pyspark.sql.types import NumericType
 
 from funs import read_table, make_set_lower
@@ -21,10 +21,10 @@ DICT_PRINT_MAX_LEN = 15
 # fraction digits to round in method compare_tables()
 SCALE_OF_NUMBER_IN_COMPARING = 2
 
-Pk_stats_generator = namedtuple(
+PkStatsGenerator = namedtuple(
     "PK_stats", "cnt_rows unique_pk_cnt pk_with_duplicates_pk"
 )
-Compare_tables_pk_stats_generator = namedtuple(
+CompareTablesPkStatsGenerator = namedtuple(
     "Compare_tables_pk_stats",
     "not_in_main_table_cnt not_in_ref_table correct_matching_cnt",
 )
@@ -47,7 +47,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
     def __init__(
         self,
         df: DataFrame,
-        pk: List[str] = [],
+        pk: List[str] = None,
         verbose: bool = False,
         custom_null_values: list[str] = ["", "NULL", "null", "Null"],
     ) -> DataFrame:
@@ -67,6 +67,16 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self._df = df
         self._verbose = verbose
         self._custom_null_values = custom_null_values
+
+        self.dict_null_in_cols = None
+        self.pk_stats = None
+        self.df_duplicates_pk = None
+        self.df_with_nulls = None
+
+        self.matching_results = None
+        self.dict_cols_with_errors = None
+        self.df_with_errors = None
+        self.columns_diff_reordered_all = None
 
         super().__init__(
             self._df._jdf, self._df.sql_ctx
@@ -163,11 +173,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             )
             self.dict_null_in_cols = self._get_sorted_dict(dict_null, cnt_all)
 
-            print(f"\nNull values in columns - {{'column': [count NULL, share NULL]}}:")
+            print("\nNull values in columns - {'column': [count NULL, share NULL]}:")
             self.__print_dict(self.dict_null_in_cols, "dict_null_in_cols")
 
             self._v_print(
-                f"Use method `.get_df_with_null(List[str])` to get a df with specified NULL columns"
+                "Use method `.get_df_with_null(List[str])` to get a df with specified NULL columns"
             )
 
             if self._pk and pk_stats and self._verbose:
@@ -221,11 +231,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 )
 
                 self._v_print(
-                    f"You can access DF with PK duplicates in an attribute `.df_duplicates_pk`\n"
+                    "You can access DF with PK duplicates in an attribute `.df_duplicates_pk`\n"
                 )
 
             # 0 - cnt rows, 1 - Unique PK, 2 - PK with duplicates
-            self.pk_stats = Pk_stats_generator(
+            self.pk_stats = PkStatsGenerator(
                 *[cnt_all, cnt_unique_pk, cnt_with_duplicates_pk]
             )
         else:
@@ -238,7 +248,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self._print_stats("Unique PK count", self.pk_stats[1])
             self._print_stats("PK with duplicates", self.pk_stats[2])
 
-    def get_df_with_null(self, null_columns: List[str] = []):
+    def get_df_with_null(self, null_columns: List[str] = None):
         """This method calculates and returns DF with selected cols that have NULL values
 
         Args:
@@ -252,6 +262,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 Returns a DF sorted by count of nulls in selected columns
                 in descending order
         """
+        if null_columns is None:
+            null_columns = []
         if not hasattr(self, "dict_null_in_cols"):
             print("Running method .get_info() first", end="\n")
             self.get_info(pk_stats=False)
@@ -276,8 +288,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 .orderBy(col("cnt_nulls").desc())
             )
             return self.df_with_nulls
-        else:
-            print("no NULL values in selected or all null columns")
+        print("no NULL values in selected or all null columns")
 
     def compare_tables(self, df_ref: DataFrame):
         """
@@ -396,10 +407,10 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             """Filter for detecting differences in non PK attributes"""
             cond_diff = f"""case
                 when
-                    ({self._dummy1} is null or {self._dummy2} is null) 
+                    ({self._dummy1} is null or {self._dummy2} is null)
                     or
                     (main.{column} is null and ref.{column} is null)
-                    or 
+                    or
                     (main.{column} = ref.{column})
                 then 0
                 else 1
@@ -522,7 +533,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             ),
         }
 
-        # TODO: convert this list to collections.namedtuple
         cnt_results = []
         for condition in self._cases_full_join.values():
             res = df_cnt_pk_errors.filter(condition).select("count").collect()
@@ -533,7 +543,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
             cnt_results.append(res_int)
 
-        return Compare_tables_pk_stats_generator(*cnt_results)
+        return CompareTablesPkStatsGenerator(*cnt_results)
 
     def __check_cols_entry(self, cols_subset, cols_all):
         """
@@ -603,7 +613,7 @@ class TablePartitionDescriber:
         """Returs list of partitioned columns"""
         schema_name, table_name = self.schema_table.split(".")
         cols = spark.catalog.listColumns(tableName=table_name, dbName=schema_name)
-        part_cols = [col.name for col in cols if col.isPartition == True]
+        part_cols = [col.name for col in cols if col.isPartition is True]
         if not part_cols:
             raise HhopException(
                 f"The table {self.schema_table} doesn't have partitions"
@@ -700,7 +710,7 @@ class SchemaManager:
                 slice_df = read_table(schema_name).take(2)
                 if len(slice_df) == 0:
                     self.dict_of_tables[table] = 0
-            except:  # spark might fail to read a table without a root folder
+            except Exception:  # spark might fail to read a table without a root folder
                 self.dict_of_tables[table] = 0
 
         self._cnt_empty_tables = len(
@@ -739,4 +749,6 @@ class SchemaManager:
 
 
 class SCD2Helper:
+    """Class helps to work with SCD2 tables"""
+
     pass
