@@ -50,6 +50,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         pk: List[str] = None,
         verbose: bool = False,
         custom_null_values: list[str] = ["", "NULL", "null", "Null"],
+        silent_mode: bool = False,
     ) -> DataFrame:
         """Initialization
 
@@ -59,10 +60,21 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             verbose (bool, optional): Choose if you want to receive additional messages.
                 Defaults to False.
             custom_null_values (list[str]) - provide values that will be considered as NULLs in NULLs check
-
+            silent_mode (bool): if true, doesn't print anything. Defaults to True
         Return:
             DataFrame as provided in call
         """
+        # usual print if not silence_mode
+        self._s_print = (
+            lambda *args, **kwargs: print(*args, **kwargs) if not silent_mode else None
+        )
+        # print if verbose = True and not silence_mode
+        self._v_print = (
+            lambda *args, **kwargs: print(*args, **kwargs)
+            if not silent_mode and verbose
+            else None
+        )
+
         self._pk = pk
         self._df = df
         self._verbose = verbose
@@ -89,11 +101,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             if v > 0
         }
 
-        # print if verbose = True
-        self._v_print = (
-            lambda *args, **kwargs: print(*args, **kwargs) if verbose else None
-        )
-        self._print_stats = lambda string, val: print(
+        self._print_stats = lambda string, val: self._s_print(
             "{:<25} {:,}".format(string + ":", val)
         )
 
@@ -111,10 +119,12 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             attr_name (str): prints attr_name if dictionary is too big
         """
         if len(dictionary) <= DICT_PRINT_MAX_LEN:
-            print(dictionary, *args, **kwargs)
+            self._s_print(dictionary, *args, **kwargs)
         else:
-            print(f"dictionary is too large ({len(dictionary)} > {DICT_PRINT_MAX_LEN})")
-            print(f"You can access the dictionary in the attribute {attr_name}")
+            self._s_print(
+                f"dictionary is too large ({len(dictionary)} > {DICT_PRINT_MAX_LEN})"
+            )
+            self._s_print(f"You can access the dictionary in the attribute {attr_name}")
 
     def _sanity_checks(self):
         """Sanity checks for provided DataFrame
@@ -173,7 +183,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             )
             self.dict_null_in_cols = self._get_sorted_dict(dict_null, cnt_all)
 
-            print("\nNull values in columns - {'column': [count NULL, share NULL]}:")
+            self._s_print(
+                "\nNull values in columns - {'column': [count NULL, share NULL]}:"
+            )
             self.__print_dict(self.dict_null_in_cols, "dict_null_in_cols")
 
             self._v_print(
@@ -183,7 +195,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             if self._pk and pk_stats and self._verbose:
                 for key in self._pk:
                     if key in self.dict_null_in_cols:
-                        print(f"PK column '{key}' contains empty values, be careful!")
+                        self._v_print(
+                            f"PK column '{key}' contains empty values, be careful!"
+                        )
 
     def _analyze_pk(self):
         """
@@ -265,7 +279,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         if null_columns is None:
             null_columns = []
         if not hasattr(self, "dict_null_in_cols"):
-            print("Running method .get_info() first", end="\n")
+            self._s_print("Running method .get_info() first", end="\n")
             self.get_info(pk_stats=False)
 
         self.__check_cols_entry(null_columns, self._df.columns)
@@ -274,7 +288,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             if set(null_columns) & set(self.dict_null_in_cols):
                 cols_filter = null_columns
             else:
-                print(
+                self._s_print(
                     f"No NULL values found in provided {null_columns}, using all: {self.dict_null_in_cols.keys()}"
                 )
                 cols_filter = self.dict_null_in_cols.keys()
@@ -288,7 +302,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 .orderBy(col("cnt_nulls").desc())
             )
             return self.df_with_nulls
-        print("no NULL values in selected or all null columns")
+        self._s_print("no NULL values in selected or all null columns")
 
     def compare_tables(self, df_ref: DataFrame):
         """
@@ -333,9 +347,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             if not hasattr(df, "pk_stats"):
                 df = DFExtender(df, self._pk, verbose=False)
                 df._analyze_pk()
-            print(name)
+            self._s_print(name)
             df._print_pk_stats()
-            print()
+            self._s_print()
 
         # rounding in any numeric columns so diffs don't considered as errors because of machine rounding
         self._df, self._df_ref = map(
@@ -355,9 +369,9 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         cols_not_in_main, cols_not_in_ref = df2_cols - df1_cols, df1_cols - df2_cols
         if cols_not_in_main:
-            print(f"cols not in main: {cols_not_in_main}")
+            self._s_print(f"cols not in main: {cols_not_in_main}")
         if cols_not_in_ref:
-            print(f"cols not in ref: {cols_not_in_ref}")
+            self._s_print(f"cols not in ref: {cols_not_in_ref}")
 
         dummy_column = "is_joined_"
         self._dummy1, self._dummy2 = dummy_column + "main", dummy_column + "ref"
@@ -380,18 +394,20 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         )
         # printing results
         if not self._common_cols:
-            print("There are no common columns outside of PK")
+            self._s_print("There are no common columns outside of PK")
         elif self.dict_cols_with_errors:
-            print(f"Errors in columns - {{'column': [count is_error, share is_error]}}")
+            self._s_print(
+                f"Errors in columns - {{'column': [count is_error, share is_error]}}"
+            )
             self.__print_dict(self.dict_cols_with_errors, "dict_cols_with_errors")
         else:
-            print("There are no errors in non PK columns")
+            self._s_print("There are no errors in non PK columns")
 
-        print("\nCount stats of matching main and reference tables:")
+        self._s_print("\nCount stats of matching main and reference tables:")
         for key, val in dict(
             zip(self._cases_full_join.keys(), self.matching_results)
         ).items():
-            print("{:<25} {:,}".format(key + ":", val))
+            self._s_print("{:<25} {:,}".format(key + ":", val))
         self._v_print(
             (
                 "\nUse DF in attribute `.df_with_errors` for further analysis\n"
@@ -817,6 +833,10 @@ class SCD2Helper:
         )
 
         return df_result
+
+    @classmethod
+    def hash_cols(*cols):
+        return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
 
     def validate_scd2(
         self,

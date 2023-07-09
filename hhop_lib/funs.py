@@ -229,3 +229,11 @@ def write_read_table(df_write: DataFrame, *write_args, **write_kwargs) -> DataFr
     df = read_table(schema_table)
 
     return df
+
+
+def safely_write_table():
+    """function is going to
+    1. write DF to a temp location
+    2. remove table in the target location (files are going to trash)
+    3. move files from a temp location to the target location"""
+    pass
