@@ -909,16 +909,14 @@ class SCD2Helper:
                 f"There are {self.pk_by_versions.pk_stats[2]} PK duplicates by {pk_check_versions} "
                 "Look at `.pk_by_versions.df_duplicates_pk`"
             )
-
+        print(f"Number of records: {self.basic_pk_check.pk_stats[0]:,}")
         if (
             self.basic_pk_check.pk_stats[2] == 0
             and cnt_invalid_dates == 0
             and cnt_broken_history == 0
             and self.pk_by_versions.pk_stats[2] == 0
         ):
-            print(
-                f"All tests passed, number of records: {self.basic_pk_check.pk_stats[0]:,}"
-            )
+            print("All tests passed")
 
     def merge_scd2_update(self, df_new):
         pass
