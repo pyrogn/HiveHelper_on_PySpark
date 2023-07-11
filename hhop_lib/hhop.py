@@ -773,6 +773,8 @@ class SCD2Helper:
         pk: List[str],
         non_pk: List[str],
         time_col: str = None,
+        merge_history: bool = False,
+        fill_history: bool = False,
         change_tech_col_names: dict = None,
         BOW: str = "1000-01-01",
         EOW: str = "9999-12-31",
@@ -784,6 +786,8 @@ class SCD2Helper:
             pk (List[str]): _description_
             non_pk (List[str]): _description_
             time_col
+            merge_history
+            fill_history
             change_tech_col_names (dict, optional): _description_. Defaults to None.
             BOW (str, optional): BeginningOfWorld. Defaults to "1000-01-01".
             EOW (str, optional): EndOfWorld. Defaults to "9999-12-31".
@@ -816,21 +820,21 @@ class SCD2Helper:
             - set(self.tech_col_names.values())
         )
 
-    def df_to_scd2(self, df, pk_cols, non_pk_cols, time_col):
+    def df_to_scd2(self):
         """
         Create SCD2 DF
         Attrs:
             non_pk_cols (list):
         """
 
-        df_cols = df.columns
+        df_cols = self._df.columns
 
-        window_pk_asc = W.partitionBy(*pk_cols).orderBy(time_col)
+        window_pk_asc = W.partitionBy(*self._pk).orderBy(self._time_col)
         df_hash = (
-            df.withColumn(
-                "row_hash", self.hash_cols(*pk_cols, *non_pk_cols)
+            self._df.withColumn(
+                "row_hash", self.hash_cols()
             )  # hash of pk and essential non pk attributes
-            .withColumn("row_actual_from", col(time_col).cast("date"))
+            .withColumn("row_actual_from", col(self._time_col).cast("date"))
             .withColumn(
                 "version_num",
                 F.count(
@@ -840,18 +844,18 @@ class SCD2Helper:
         )
         df_ded_by_version = deduplicate_df(
             df_hash,
-            pk=[*pk_cols, "version_num"],
+            pk=[*self._pk, "version_num"],
             order_by_cols=[
-                time_col
+                self._time_col
             ],  # first row with same hash with respect to version numbers
         )
         df_ded_by_date = deduplicate_df(
             df_ded_by_version,
-            pk=[*pk_cols, "row_actual_from"],
-            order_by_cols=[F.desc(time_col)],  # last value for every day
+            pk=[*self._pk, "row_actual_from"],
+            order_by_cols=[F.desc(self._time_col)],  # last value for every day
         )
 
-        window_row_actual_to = W.partitionBy(*pk_cols).orderBy("row_actual_from")
+        window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
 
         alias_tech_col_names = lambda x: col(x).alias(self.tech_col_names[x])
 
@@ -871,6 +875,7 @@ class SCD2Helper:
         return df_result
 
     def hash_cols(self, *cols):
+        """MD5 hash of pk+non_pk columns by default. Or hash of provided sorted columns"""
         if not len(cols):
             cols = [*self._pk, *self._non_pk]
         return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
@@ -880,7 +885,7 @@ class SCD2Helper:
     ):
         pass
 
-    def validate_scd2(self, df, pk, non_pk, time_col) -> None:
+    def validate_scd2(self) -> None:
         """Validation of a SCD2 table
         Right now it looks messy, it's going to be better
 
@@ -891,8 +896,8 @@ class SCD2Helper:
             time_col (_type_): _description_
         """
         # check on basic key: pk + row_actual_to
-        pk_check_basic = [*pk, "row_actual_to"]
-        self.basic_pk_check = DFExtender(df, pk=pk_check_basic, silent_mode=True)
+        pk_check_basic = [*self._pk, "row_actual_to"]
+        self.basic_pk_check = DFExtender(self._df, pk=pk_check_basic, silent_mode=True)
         self.basic_pk_check.get_info(null_stats=False)
         if self.basic_pk_check.pk_stats[2] != 0:
             print(
@@ -909,7 +914,7 @@ class SCD2Helper:
             )
 
         self.df_invalid_dates = (
-            df.withColumn("valid_date_from", is_valid_date("row_actual_from"))
+            self._df.withColumn("valid_date_from", is_valid_date("row_actual_from"))
             .withColumn("valid_date_to", is_valid_date("row_actual_to"))
             .filter("valid_date_from is False or valid_date_to is false")
         )
@@ -920,8 +925,8 @@ class SCD2Helper:
             )
 
         # check if version history is broken (overlapping or non continuous)
-        window_continuous_history = W.partitionBy(*pk).orderBy("row_actual_from")
-        self.df_broken_history = df.withColumn(
+        window_continuous_history = W.partitionBy(*self._pk).orderBy("row_actual_from")
+        self.df_broken_history = self._df.withColumn(
             "is_good_history",
             col("row_actual_to")
             == F.date_sub(
@@ -936,16 +941,16 @@ class SCD2Helper:
             )
 
         # check if there are new versions with the same hash (extra version in this case is harmless but wrong)
-        window_pk_asc = W.partitionBy(*pk).orderBy(time_col)
-        df_hash_versions = df.withColumn(
-            "row_hash", self.hash_cols(*pk, *non_pk)
+        window_pk_asc = W.partitionBy(*self._pk).orderBy(self._time_col)
+        df_hash_versions = self._df.withColumn(
+            "row_hash", self.hash_cols(*self._pk, *self._non_pk)
         ).withColumn(
             "version_num",
             F.count(
                 F.when(F.lag("row_hash").over(window_pk_asc) != col("row_hash"), 1)
             ).over(window_pk_asc),
         )
-        pk_check_versions = [*pk, "version_num"]
+        pk_check_versions = [*self._pk, "version_num"]
         self.pk_by_versions = DFExtender(
             df_hash_versions, pk=pk_check_versions, silent_mode=True
         )
@@ -1029,11 +1034,94 @@ class SCD2Helper:
 
         return filled_df
 
-    def merge_scd2_history(self):
-        pass
+    def merge_scd2_history(self) -> DataFrame:
+        """TODO: MAKE IT BETTER, common parts move to a class
+        If there are holes in history, this method is going to extrapolate versions falsely
+        If it is the case, set a flag fill_history=True
+        Returns:
+            DataFrame: DF with merged SCD2 history
+        """
+        window_inc_any_versions = W.partitionBy(*self._pk).orderBy("row_actual_from")
+
+        df_cols = self._df.columns
+        df_hash = self._df.withColumn(
+            "row_hash", self.hash_cols()
+        ).withColumn(  # hash of pk and essential non pk attributes
+            "version_num",
+            F.count(
+                F.when(
+                    F.lag("row_hash").over(window_inc_any_versions) != col("row_hash"),
+                    1,
+                )
+            ).over(window_inc_any_versions),
+        )
+        # df_merged_history = df_hash
+        df_ded_by_version = deduplicate_df(
+            df_hash,
+            pk=[*self._pk, "version_num"],
+            order_by_cols=[
+                "row_actual_from"
+            ],  # first row with same hash with respect to version numbers
+        )
+        alias_tech_col_names = lambda x: col(x).alias(self.tech_col_names[x])
+        df_merged_history = df_ded_by_version.withColumn(
+            "row_actual_to",
+            F.coalesce(
+                F.date_sub(F.lead("row_actual_from").over(window_inc_any_versions), 1),
+                F.lit("9999-12-31"),
+            ),
+        ).select(
+            *df_cols,
+            # alias_tech_col_names("row_hash"),
+            # alias_tech_col_names("row_actual_from").cast("string"),
+            # alias_tech_col_names("row_actual_to").cast("string"),
+        )
+
+        # window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
+        return df_merged_history
 
     def merge_scd2_update(self, df_new):
         pass
 
-    def join_scd2(self):
-        pass
+    def join_scd2(
+        self,
+        df2: "SCD2Helper",
+    ) -> DataFrame:
+        """_summary_
+
+        Args:
+            df2 (SCD2Helper): DataFrame from the enclosing class
+
+        Returns:
+            DataFrame: joined DataFrame with SCD2 history
+        """
+        df1, df2 = self._df.alias("df1"), df2.alias("df2")
+
+        tech_attr = {"row_actual_from", "row_actual_to", "row_hash"}
+
+        def get_non_pk_attrs(df):
+            all_attrs = set(df.columns)
+            pk_attrs = set(df._pk)
+            non_pk_attrs = all_attrs - tech_attr - pk_attrs
+            return non_pk_attrs
+
+        greatest_from = F.greatest(df1["row_actual_from"], df2["row_actual_from"])
+        least_to = F.least(df1["row_actual_to"], df2["row_actual_to"])
+        pk_cond_join = " and ".join(
+            [f"df1.{pk_col} = df2.{pk_col}" for pk_col in self._pk]
+        )
+
+        cond_scd2_join = F.expr(pk_cond_join) & (greatest_from <= least_to)
+        df_joined = df1.join(df2, on=cond_scd2_join, how="inner")
+
+        df_new_scd2 = df_joined.select(
+            *[
+                f"df1.{pk_col}" for pk_col in self._pk
+            ],  # cannot get pk cols directly because of specific condition in join
+            *get_non_pk_attrs(df1),
+            *get_non_pk_attrs(df2),
+            greatest_from.alias("row_actual_from"),
+            least_to.alias("row_actual_to"),
+        )
+
+        return df_new_scd2
