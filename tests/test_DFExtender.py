@@ -10,6 +10,8 @@ import pyspark.sql.functions as F
 import pyspark.sql.types as T
 from pyspark.sql.window import Window as W
 
+from typing import List
+
 custom_spark_params = {
     "app_name": "custom_app_name123",
 }
@@ -46,7 +48,7 @@ def read_synth_df(table_name, subfolder=None):
 
 
 @pytest.mark.skip()
-def is_exact_dfs(df1, df2, pk: list[str]) -> bool:
+def is_exact_dfs(df1, df2, pk: List[str]) -> bool:
     df1_check = DFExtender(df1, pk=pk)
     df1_check.compare_tables(df2)
 

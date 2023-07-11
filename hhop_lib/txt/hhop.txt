@@ -50,7 +50,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         pk: List[str] = None,
         verbose: bool = False,
         silent_mode: bool = False,
-        custom_null_values: list[str] = ["", "NULL", "null", "Null"],
+        custom_null_values: List[str] = ["", "NULL", "null", "Null"],
     ) -> DataFrame:
         """Initialization
 
@@ -59,7 +59,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             pk ((list, tuple, set), optional): Primary Key of the DF. Defaults to None.
             verbose (bool, optional): Choose if you want to receive additional messages.
                 Defaults to False.
-            custom_null_values (list[str]) - provide values that will be considered as NULLs in NULLs check
+            custom_null_values (List[str]) - provide values that will be considered as NULLs in NULLs check
             silent_mode (bool): if true, doesn't print anything. Defaults to False
         Return:
             DataFrame as provided in call

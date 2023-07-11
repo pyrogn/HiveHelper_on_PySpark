@@ -50,7 +50,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         pk: List[str] = None,
         verbose: bool = False,
         silent_mode: bool = False,
-        custom_null_values: list[str] = ["", "NULL", "null", "Null"],
+        custom_null_values: List[str] = ["", "NULL", "null", "Null"],
     ) -> DataFrame:
         """Initialization
 
@@ -59,7 +59,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             pk ((list, tuple, set), optional): Primary Key of the DF. Defaults to None.
             verbose (bool, optional): Choose if you want to receive additional messages.
                 Defaults to False.
-            custom_null_values (list[str]) - provide values that will be considered as NULLs in NULLs check
+            custom_null_values (List[str]) - provide values that will be considered as NULLs in NULLs check
             silent_mode (bool): if true, doesn't print anything. Defaults to False
         Return:
             DataFrame as provided in call
@@ -767,7 +767,40 @@ class SchemaManager:
 class SCD2Helper:
     """Class helps to work with SCD2 tables"""
 
-    def __init__(self, change_tech_col_names: dict = None) -> DataFrame:
+    def __init__(
+        self,
+        df: DataFrame,
+        pk: List[str],
+        non_pk: List[str],
+        time_col: str = None,
+        change_tech_col_names: dict = None,
+        BOW: str = "1000-01-01",
+        EOW: str = "9999-12-31",
+    ) -> DataFrame:
+        """_summary_
+
+        Args:
+            df (DataFrame): _description_
+            pk (List[str]): _description_
+            non_pk (List[str]): _description_
+            time_col
+            change_tech_col_names (dict, optional): _description_. Defaults to None.
+            BOW (str, optional): BeginningOfWorld. Defaults to "1000-01-01".
+            EOW (str, optional): EndOfWorld. Defaults to "9999-12-31".
+
+        Returns:
+            DataFrame: _description_
+        """
+        # add df, pk, non_pk_cols(which can be calculated)
+        # change_tech_col_names is the last thing, fix df yourself!
+
+        self._df = df
+        self._pk = pk
+        self._non_pk = non_pk
+        self._time_col = time_col
+
+        self._BOW = BOW
+        self._EOW = EOW
         self.tech_col_names = {  # for quick change if needed
             "row_hash": "row_hash",
             "row_actual_from": "row_actual_from",
@@ -775,6 +808,13 @@ class SCD2Helper:
         }
         if change_tech_col_names:
             self.tech_col_names.update(change_tech_col_names)
+
+        self._extra_attributes = (
+            set(self._df.columns)
+            - set(self._pk)
+            - set(self._non_pk)
+            - set(self.tech_col_names.values())
+        )
 
     def df_to_scd2(self, df, pk_cols, non_pk_cols, time_col):
         """
@@ -831,7 +871,14 @@ class SCD2Helper:
         return df_result
 
     def hash_cols(self, *cols):
+        if not len(cols):
+            cols = [*self._pk, *self._non_pk]
         return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
+
+    def version_num(
+        self,
+    ):
+        pass
 
     def validate_scd2(self, df, pk, non_pk, time_col) -> None:
         """Validation of a SCD2 table
@@ -918,10 +965,75 @@ class SCD2Helper:
         ):
             print("All tests passed")
 
+    def fill_scd2_history(self) -> DataFrame:
+        """Method fills holes in SCD2 history with NULL values
+        1. It searches where it is need to fill history behind of current version
+        2. If it is last version of window, check if there's a need in the version till EOW
+        Returns:
+            DataFrame: DataFrame with full history from BOW to EOW
+        """
+        null_attrs = [
+            F.lit(None).alias(x) for x in (*self._non_pk, *self._extra_attributes)
+        ]
+        window_inc_versions = W.partitionBy(*self._pk).orderBy("row_actual_from")
+        df_holes = (
+            self._df.withColumn(
+                "earliest_from_in_hole",
+                F.coalesce(
+                    F.date_add(F.lag("row_actual_to").over(window_inc_versions), 1),
+                    F.lit(self._BOW),
+                ),
+            )
+            .withColumn(
+                "is_need_fill_behind",
+                col("row_actual_from") != col("earliest_from_in_hole"),
+            )
+            .withColumn(
+                "hole_behind",
+                F.when(
+                    col("is_need_fill_behind"),
+                    F.concat_ws(
+                        ",",
+                        col("earliest_from_in_hole"),
+                        F.date_sub("row_actual_from", 1),
+                    ),
+                ),
+            )
+            .withColumn(
+                "hole_plus_infinity_history",
+                F.when(
+                    F.lead("row_actual_to").over(window_inc_versions).isNull()
+                    & (col("row_actual_to") != F.lit(self._EOW)),
+                    F.concat_ws(",", F.date_add("row_actual_to", 1), F.lit(self._EOW)),
+                ),
+            )
+            .withColumn(
+                "merged_history",
+                F.concat_ws(";", "hole_behind", "hole_plus_infinity_history"),
+            )
+            .withColumn("from_to_str", F.explode(F.split("merged_history", ";")))
+            .filter(col("from_to_str") != "")
+            .withColumn("splitted_from_to", F.split("from_to_str", ","))
+            .withColumn("row_actual_from", col("splitted_from_to").getItem(0))
+            .withColumn("row_actual_to", col("splitted_from_to").getItem(1))
+            .select(
+                *self._pk,
+                *null_attrs,
+                self.hash_cols().alias("row_hash"),
+                "row_actual_from",
+                "row_actual_to",
+            )
+        )
+
+        filled_df = self._df.unionByName(df_holes)
+
+        return filled_df
+
+    def merge_scd2_history(self):
+        pass
+
     def merge_scd2_update(self, df_new):
         pass
 
-    def join_scd2(
-        self,
-    ):
+    def join_scd2(self):
         pass
