@@ -162,3 +162,8 @@ segments_months.ipynb
 moving_months.txt
 spark_params.ipynb
 df_to_scd2.txt
+hhop/spark-warehouse
+hhop/metastore_db
+jupyter/_spark_configs
+hhop/_spark_configs
+jupyter/spark-warehouse

@@ -2,9 +2,6 @@ import os
 import sys
 import pytest
 
-# do not know how to make it the Python way
-sys.path.append(os.path.join(os.path.dirname(__file__), os.pardir, "hhop_lib"))
-
 from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 import pyspark.sql.types as T
@@ -18,29 +15,29 @@ custom_spark_params = {
 
 
 # import pass_spark_config
-from pass_spark_config import write_spark_config
+from hhop.hhop.pass_spark_config import write_spark_config
 
 write_spark_config(custom_spark_params)
 
-from hhop import (
+from hhop.hhop.main import (
     DFExtender,
     SchemaManager,
     TablePartitionDescriber,
 )  # main classes
-from funs import (
+from hhop.hhop.funs import (
     read_table,
     write_table,
     write_read_table,
     union_all,
     deduplicate_df,
 )  # useful functions
-from spark_init import spark
-from exceptions import HhopException
+from hhop.hhop.spark_init import spark
+from hhop.hhop.exceptions import HhopException
 
 
 @pytest.mark.skip()
 def read_synth_df(table_name, subfolder=None):
-    folder_name = os.path.join("synth_data", "tests")
+    folder_name = os.path.join("hhop", "synth_data", "tests")
     if subfolder:
         folder_name = os.path.join(folder_name, subfolder)
     df = spark.read.csv(os.path.join(folder_name, table_name), header=True, sep=";")

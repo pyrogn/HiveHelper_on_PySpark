@@ -1,9 +1,11 @@
 # HiveHelper_on_PySpark
  A very specific, but time-saving library for analyzing Hive tables using PySpark.
 
-It is tested on
-1. PySpark 3.2.1 and PySpark 3.1.2
-2. Hive 3.1.3
+It is tested on PySpark 3.1, 3.2
+
+## How to install (might change)
+1. Clone repository
+2. `pip install -e .`
 
 ## Features
 1. Getting info about a table based on Primary Key (PK) and count NULL values in columns

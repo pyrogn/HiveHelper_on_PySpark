@@ -12,8 +12,8 @@ import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 from pyspark.sql.types import NumericType
 
-from funs import read_table, make_set_lower, deduplicate_df
-from exceptions import HhopException
+from hhop.hhop.funs import read_table, make_set_lower, deduplicate_df, union_all
+from hhop.hhop.exceptions import HhopException
 
 # lower if output of errors is too long
 # set higher if you need longer dictionary to pring
@@ -764,7 +764,7 @@ class SchemaManager:
         )
 
 
-class SCD2Helper:
+class SCD2Helper(pyspark.sql.dataframe.DataFrame):
     """Class helps to work with SCD2 tables"""
 
     def __init__(
@@ -778,7 +778,7 @@ class SCD2Helper:
         change_tech_col_names: dict = None,
         BOW: str = "1000-01-01",
         EOW: str = "9999-12-31",
-    ) -> DataFrame:
+    ) -> "SCD2Helper":
         """_summary_
 
         Args:
@@ -798,6 +798,12 @@ class SCD2Helper:
         # add df, pk, non_pk_cols(which can be calculated)
         # change_tech_col_names is the last thing, fix df yourself!
 
+        self._passed_args = locals()
+
+        super().__init__(
+            df._jdf, df.sql_ctx
+        )  # magic to integrate pyspark DF into this class
+
         self._df = df
         self._pk = pk
         self._non_pk = non_pk
@@ -805,11 +811,14 @@ class SCD2Helper:
 
         self._BOW = BOW
         self._EOW = EOW
+        # make it namedtuple
         self.tech_col_names = {  # for quick change if needed
             "row_hash": "row_hash",
             "row_actual_from": "row_actual_from",
             "row_actual_to": "row_actual_to",
         }
+        # 1. rename provided columns to standard named
+        # 2. when returned - renamed it back to provided names
         if change_tech_col_names:
             self.tech_col_names.update(change_tech_col_names)
 
@@ -1032,7 +1041,7 @@ class SCD2Helper:
 
         filled_df = self._df.unionByName(df_holes)
 
-        return filled_df
+        return SCD2Helper(filled_df, self._passed_args[2:])
 
     def merge_scd2_history(self) -> DataFrame:
         """TODO: MAKE IT BETTER, common parts move to a class
@@ -1080,8 +1089,42 @@ class SCD2Helper:
         # window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
         return df_merged_history
 
-    def merge_scd2_update(self, df_new):
-        pass
+    def merge_scd2_update(self, df_new) -> "SCD2Helper":
+        def rename_tech_cols(df, num):
+            df_temp = df
+            for tech_col in ("row_actual_from", "row_actual_to"):
+                df_temp = df_temp.withColumnRenamed(tech_col + str(num), tech_col)
+            return df_temp
+
+        df1 = rename_tech_cols(self._df, 1)
+        df2 = rename_tech_cols(self._df, 2)
+
+        df_history = self._df.filter(col("row_actual_to") != self._EOW)
+        df_actual = self._df.filter(col("row_actual_to") == self._EOW)
+
+        df_merged = df_actual.join(df_new, on=[*self._pk], how="full").withColumn(
+            "operation_type",
+            F.when(df_actual["row_hash"] == df_new["row_hash"], F.lit("nochange"))
+            .when(df_actual["row_hash"] != df_new["row_hash"], F.lit("update"))
+            .when(df_actual["row_hash"].isNull(), F.lit("insert"))
+            .when(df_new["row_hash"].isNull(), F.lit("close")),
+        )
+
+        df_close = df_merged.filter(col("operation_type") == "close").withColumn(
+            "row_actual_to", F.date_sub(F.current_date(), 1)  # which row_actual_to
+        )
+
+        df_update = df_merged.filter(col("operation_type") == "update")  # two versions
+        df_nochange = df_merged.filter(
+            col("operation_type") == "nochange"
+        )  # first techcols
+        df_insert = df_merged.filter(
+            col("operation_type") == "insert"
+        )  # second techcols
+
+        df_result = union_all(df_history, df_nochange, df_close, df_update, df_insert)
+
+        return df_result
 
     def join_scd2(
         self,
