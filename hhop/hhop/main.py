@@ -6,16 +6,19 @@ from typing import List
 
 import pyspark
 from pyspark.sql import DataFrame
-from spark_init import spark
 from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 from pyspark.sql.types import NumericType
 
-from hhop.hhop.funs import read_table, make_set_lower, deduplicate_df, union_all
-from hhop.hhop.exceptions import HhopException
+from .funs import read_table, make_set_lower, deduplicate_df, union_all
+from .exceptions import HhopException
+from .spark_init import get_spark_builder
 
-# lower if output of errors is too long
+# get spark app by calling a builder, not sure if it is the best way to get spark app
+spark = lambda: get_spark_builder().getOrCreate()
+
+# make output lower if dict of errors is too long
 # set higher if you need longer dictionary to pring
 DICT_PRINT_MAX_LEN = 15
 # fraction digits to round in method compare_tables()
@@ -611,7 +614,8 @@ class TablePartitionDescriber:
         part_cols = self.__get_partitioned_cols()
         parsed_part_cols = self.__get_mapping_for_part_cols(part_cols, "partitions")
         self.df_partitions = (
-            spark.sql(f"show partitions {schema_table}")
+            spark()
+            .sql(f"show partitions {schema_table}")
             .select(F.split("partition", "/").alias("partitions"))
             .select(*parsed_part_cols)
         )
@@ -628,7 +632,7 @@ class TablePartitionDescriber:
     def __get_partitioned_cols(self):
         """Returs list of partitioned columns"""
         schema_name, table_name = self.schema_table.split(".")
-        cols = spark.catalog.listColumns(tableName=table_name, dbName=schema_name)
+        cols = spark().catalog.listColumns(tableName=table_name, dbName=schema_name)
         part_cols = [col.name for col in cols if col.isPartition is True]
         if not part_cols:
             raise HhopException(
@@ -701,7 +705,8 @@ class SchemaManager:
                 dict_table_view[type_of_table][1],
             )
             tables = (
-                spark.sql(f"show {show_arg} in {self.schema}")
+                spark()
+                .sql(f"show {show_arg} in {self.schema}")
                 .select(colname)
                 .rdd.flatMap(lambda x: x)
                 .collect()
@@ -755,7 +760,7 @@ class SchemaManager:
 
         for table, val in self.dict_of_tables.items():
             if val == 0:
-                spark.sql(f"drop table if exists {self.schema}.{table}")
+                spark().sql(f"drop table if exists {self.schema}.{table}")
 
         self._cnt_list_tables()
 

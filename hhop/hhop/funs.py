@@ -4,14 +4,16 @@ import subprocess
 import inspect
 from typing import List, Set, Tuple
 
-from hhop.hhop.spark_init import spark
 
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
 
-from hhop.hhop.exceptions import HhopException
+from .exceptions import HhopException
+from .spark_init import get_spark_builder
+
+spark = lambda: get_spark_builder().getOrCreate()
 
 DEFAULT_SCHEMA_WRITE = "default"
 
@@ -38,7 +40,7 @@ def read_table(
     Returns:
         DataFrame: PySpark DataFrame from Hive
     """
-    df = spark.sql(f"select * from {schema_table}")
+    df = spark().sql(f"select * from {schema_table}")
 
     if columns != "all":
         df = df.select(columns)
@@ -52,7 +54,7 @@ def read_table(
 
         # partition columns
         schema_name, table_name = schema_table.split(".")
-        cols = spark.catalog.listColumns(tableName=table_name, dbName=schema_name)
+        cols = spark().catalog.listColumns(tableName=table_name, dbName=schema_name)
         _part_cols = [col.name for col in cols if col.isPartition is True]
         if _part_cols:
             print(f"partition columns: {_part_cols}")
@@ -70,7 +72,7 @@ def get_table_location(schema_table: str):
     Funtction returns HDFS address of a table if it exists"""
 
     try:
-        describe_table = spark.sql(f"describe formatted {schema_table}")
+        describe_table = spark().sql(f"describe formatted {schema_table}")
 
         table_location = (
             describe_table.filter(col("col_name") == "Location")

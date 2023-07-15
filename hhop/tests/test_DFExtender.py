@@ -9,30 +9,24 @@ from pyspark.sql.window import Window as W
 
 from typing import List
 
-custom_spark_params = {
-    "app_name": "custom_app_name123",
-}
+from hhop import get_spark_builder
 
+spark_builder = get_spark_builder("custom_name")
+spark = spark_builder.getOrCreate()
 
-# import pass_spark_config
-from hhop.hhop.pass_spark_config import write_spark_config
-
-write_spark_config(custom_spark_params)
-
-from hhop.hhop.main import (
+from hhop import (
     DFExtender,
     SchemaManager,
     TablePartitionDescriber,
 )  # main classes
-from hhop.hhop.funs import (
+from hhop import (
     read_table,
     write_table,
     write_read_table,
     union_all,
     deduplicate_df,
 )  # useful functions
-from hhop.hhop.spark_init import spark
-from hhop.hhop.exceptions import HhopException
+from hhop import HhopException
 
 
 @pytest.mark.skip()
