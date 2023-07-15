@@ -135,7 +135,6 @@ def write_table(
     df: DataFrame,
     table: str,
     schema: str = DEFAULT_SCHEMA_WRITE,
-    type_write: str = "save",
     mode: str = "overwrite",
     format_files: str = "parquet",
     partition_cols: List[str] = None,
@@ -151,9 +150,6 @@ def write_table(
         df (DataFrame): DataFrame to write to Hive
         table (str): Name of the table (without schema)
         schema (str, optional): Name of the schema. Defaults to DEFAULT_SCHEMA_WRITE in this file.
-        type_write (str, optional): 'save' for saveAsTable, 'insert' for InsertIntoTable
-            If you want to replace dynamic partitions do not forget the next param
-            ("spark.sql.sources.partitionOverwriteMode","dynamic")
         mode (str, optional): Mode to write (overwrite or append). Defaults to "overwrite".
         format_files (str, optional): Format of files in HDFS. Defaults to "parquet".
         partition_cols (List  |  Set  |  Tuple, optional): Partitioned columns of the table. Defaults to [].
@@ -161,8 +157,8 @@ def write_table(
     Raises:
         HhopException: raised if partition columns are not in the DF
     """
-
-    location_if_exists = get_table_location(f"{schema}.{table}")
+    schema_table = f"{schema}.{table}"
+    location_if_exists = get_table_location(schema_table)
 
     df_save = df.write
 
@@ -178,17 +174,10 @@ def write_table(
 
     if partition_cols:
         df_save = df_save.partitionBy(partition_cols)
-
-    schema_table = f"{schema}.{table}"
-    if type_write == "save":
-        df_save.saveAsTable(schema_table)
-    elif type_write == "insert":
-        df_save.insertInto(schema_table)
-    else:
-        raise HhopException("Use save (.saveAsTable) or insert (insertInto) keywords")
+    df_save.saveAsTable(schema_table)
 
     if verbose:
-        print(f"DF saved as {schema}.{table}")
+        print(f"DF saved as {schema_table}")
 
 
 def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):

@@ -155,6 +155,5 @@ cython_debug/
 *.numbers
 .vscode/**
 .vscode/settings.json
-_spark_configs/*.json
 **/spark-warehouse
 **/metastore_db
