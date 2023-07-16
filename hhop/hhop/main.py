@@ -26,7 +26,7 @@ from .spark_init import get_spark_builder
 # get spark app by calling a builder, not sure if it is the best way to get spark app
 spark = lambda: get_spark_builder().getOrCreate()
 
-# make output lower if dict of errors is too long
+# to make output smaller if dict of errors is too long
 # set higher if you need longer dictionary to pring
 DICT_PRINT_MAX_LEN = 15
 # fraction digits to round in method compare_tables()
@@ -366,7 +366,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self._df, self._df_ref = map(
             self.__round_numberic_cols_df, [self._df, self._df_ref]
         )
-
+        # might want to create a class to compare and find columns of 2 DF,
+        # because this functionality is applied in the script at least 3 times
         df1_cols = set(self._df.columns)
         df2_cols = set(self._df_ref.columns)
         self._common_cols = (df1_cols & df2_cols) - set(self._pk)
@@ -495,8 +496,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             common_cols_grouped.extend(new_modified_columns)
 
         self.columns_diff_reordered_all = (
-            # col1_ref, col1_main, col1_diff... This may be easier to read
-            # however common_cols is python's set and it loses order
+            # col1_ref, col1_main, col1_diff... This may be easier to read and compare
+            # however _common_cols is python's set and it loses order
             *basic_diff_columns,
             *common_cols_grouped,
             *map(
@@ -821,6 +822,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             df._jdf, df.sql_ctx
         )  # magic to integrate pyspark DF into this class
 
+        # TODO: make every column lower
         self._df = df
         self._pk = pk or []  # if None then empty list
         self._non_pk = non_pk or []
@@ -1084,21 +1086,61 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Returns:
             DataFrame: DF with merged SCD2 history
         """
-        window_inc_any_versions = W.partitionBy(*self._pk).orderBy("row_actual_from")
-
-        df_cols = self._df.columns
-        df_hash = self._df.withColumn(
-            "row_hash", self.hash_cols()
-        ).withColumn(  # hash of pk and essential non pk attributes
-            "version_num",
-            F.count(
-                F.when(
-                    F.lag("row_hash").over(window_inc_any_versions) != col("row_hash"),
-                    1,
-                )
-            ).over(window_inc_any_versions),
+        inc_any_version = W.partitionBy(*self._pk).orderBy("row_actual_from")
+        inc_true_version = W.partitionBy(*self._pk, "version_num").orderBy(
+            "row_actual_from"
         )
-        # df_merged_history = df_hash
+        df_cols = self._df.columns
+        df_hash = (
+            self._df.withColumn(
+                "row_hash", self.hash_cols()
+            )  # hash of pk and essential non pk attributes
+            .withColumn("previous_to", F.lag("row_actual_to").over(inc_any_version))
+            .withColumn(
+                "diff_with_previous_hash",
+                F.lag("row_hash").over(inc_any_version) != col("row_hash"),
+            )
+            .withColumn(
+                "version_num",  # true version num
+                F.count(
+                    F.when(
+                        col("diff_with_previous_hash")
+                        | (
+                            col("row_actual_from") != F.date_add(col("previous_to"), 1)
+                        ),  # any hole in history also creates new version
+                        F.lit(1),
+                    )
+                ).over(inc_any_version),
+            )
+            .withColumn(
+                "version_num_behind",
+                F.coalesce(
+                    F.lag("version_num").over(inc_any_version),
+                    col("version_num") - 1,
+                ),
+            )
+            .withColumn(
+                "version_num_infront",
+                F.coalesce(
+                    F.lead("version_num").over(inc_any_version),
+                    col("version_num") + 1,
+                ),
+            )
+            .filter(
+                ~(  # exclude rows surrounded by the same version.
+                    # so at max 2 rows are left with the same version
+                    (col("version_num") == col("version_num_behind"))
+                    & (col("version_num") == col("version_num_infront"))
+                )
+            )
+            .withColumn(
+                "row_actual_to",  # if there is second version, we get row_actual_to from it
+                F.coalesce(
+                    F.lead("row_actual_to").over(inc_true_version), col("row_actual_to")
+                ),
+            )
+        )
+
         df_ded_by_version = deduplicate_df(
             df_hash,
             pk=[*self._pk, "version_num"],
@@ -1107,32 +1149,41 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             ],  # first row with same hash with respect to version numbers
         )
         alias_tech_col_names = lambda x: col(x).alias(self.tech_col_names[x])
-        df_merged_history = df_ded_by_version.withColumn(
-            "row_actual_to",
-            F.coalesce(
-                F.date_sub(F.lead("row_actual_from").over(window_inc_any_versions), 1),
-                F.lit("9999-12-31"),
-            ),
-        ).select(
+        df_merged_history = df_ded_by_version.select(
             *df_cols,
             # alias_tech_col_names("row_hash"),
             # alias_tech_col_names("row_actual_from").cast("string"),
             # alias_tech_col_names("row_actual_to").cast("string"),
         )
 
-        # window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
-        # return df_merged_history
         return SCD2Helper(df_merged_history, **self._passed_args)
 
     def merge_scd2_update(self, df_new) -> "SCD2Helper":
-        def rename_tech_cols(df, num):
+        # TODO: raise error when cols are different or different PK
+        # or there are no row_actual_from, row_actual_to
+
+        common_cols = self._df.columns
+        # df1_cols = set(self._df.columns)
+        # df2_cols = set(self._df_ref.columns)
+        # self._common_cols = (df1_cols & df2_cols) - set(self._pk)
+        # self._df1_extracols = df1_cols - self._common_cols - set(self._pk)
+        # self._df2_extracols = df2_cols - self._common_cols - set(self._pk)
+
+        cols_not_pk = set(common_cols) - set(self._pk)
+        tech_cols_final = ["row_hash", "row_actual_from", "row_actual_to"]
+        dict_num_cols = {
+            str(enum): cols
+            for enum, cols in zip([1, 2], cols_not_pk - set(tech_cols_final))
+        }
+
+        def rename_cols(df, num):
             df_temp = df
-            for tech_col in ("row_actual_from", "row_actual_to"):
-                df_temp = df_temp.withColumnRenamed(tech_col, tech_col + str(num))
+            for column in cols_not_pk:
+                df_temp = df_temp.withColumnRenamed(column, column + str(num))
             return df_temp
 
-        df1 = rename_tech_cols(self._df, 1)
-        df2 = rename_tech_cols(self._df, 2)
+        df1 = rename_cols(self._df, 1)
+        df2 = rename_cols(df_new._df, 2)
 
         df_history = df1.filter(col("row_actual_to1") != self._EOW)
         df_actual = df1.filter(col("row_actual_to1") == self._EOW)
@@ -1149,20 +1200,41 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         spark().sql(f"drop table if exists {stg_table_name}")
         df_merged = write_read_table(df_merged, stg_table_name)
 
-        df_close = df_merged.filter(col("operation_type") == "close").withColumn(
-            "row_actual_to", F.date_sub(F.current_date(), 1)  # which row_actual_to
+        df_close = (
+            df_merged.filter(col("operation_type") == "close")
+            .withColumnRenamed("row_actual_from1", "row_actual_from")
+            .withColumn("row_actual_to", F.date_sub(F.current_date(), 1))
+            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
         )
 
-        df_update = df_merged.filter(col("operation_type") == "update")  # two versions
-        df_nochange = df_merged.filter(
-            col("operation_type") == "nochange"
-        )  # first techcols
-        df_insert = df_merged.filter(
-            col("operation_type") == "insert"
-        )  # second techcols
+        df_update = df_merged.filter(
+            col("operation_type") == "update"
+        )  # two versions on each update
+        df_update_close = (
+            df_update.withColumnRenamed("row_actual_from1", "row_actual_from")
+            .withColumn("row_actual_to", F.date_sub(F.current_date()))
+            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
+        )
+        df_update_new = (
+            df_update.withColumn("row_actual_from", F.current_date())
+            .withColumnRenamed("row_actual_to1", "row_actual_to")
+            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
+        )
+        df_nochange = (
+            df_merged.filter(col("operation_type") == "nochange")
+            .withColumnRenamed("row_actual_from1", "row_actual_from")
+            .withColumnRenamed("row_actual_to1", "row_actual_to")
+            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
+        )
+        df_insert = (
+            df_merged.filter(col("operation_type") == "insert")
+            .withColumnRenamed("row_actual_from1", "row_actual_from")
+            .withColumnRenamed("row_actual_to1", "row_actual_to")
+            .select(*self._pk, dict_num_cols["2"], *tech_cols_final)
+        )
 
         df_merged_update = union_all(
-            df_history, df_nochange, df_close, df_update, df_insert
+            df_history, df_nochange, df_close, df_update_close, df_update_new, df_insert
         )
 
         # return df_result
@@ -1178,6 +1250,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Returns:
             DataFrame: joined DataFrame with SCD2 history
         """
+        # TODO: check if dataframes have the same key and correct tech cols
         df1, df2 = self._df.alias("df1"), df2.alias("df2")
 
         tech_attr = {"row_actual_from", "row_actual_to", "row_hash"}
@@ -1197,7 +1270,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         )
 
         cond_scd2_join = F.expr(pk_cond_join) & (greatest_from <= least_to)
-        df_joined = df1.join(df2, on=cond_scd2_join, how="full")
+        df_joined = df1.join(df2, on=cond_scd2_join, how=join_type)
 
         df_joined_scd2 = df_joined.select(
             *[F.coalesce(f"df1.{pk_col}", f"df2.{pk_col}") for pk_col in self._pk],
