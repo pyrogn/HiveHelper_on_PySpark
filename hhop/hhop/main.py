@@ -779,9 +779,35 @@ class SchemaManager:
 
 
 ErrorsInSCD2TableGenerator = namedtuple(
-    "Errors_In_SCD2_table_Generator",
+    "Errors_In_SCD2_table",
     "duplicates_by_pk invalid_dates broken_history duplicates_by_version",
 )
+
+
+class DFCleanerValidator:
+    """WIP
+    Helps with comparing and raising exceptions on columns of DFs
+    """
+
+    def __init__(self, df1, df2=None):
+        self._df1 = df1
+        self._df2 = df2
+        self._df1_columns = self._df1.columns
+        self._df2_columns = self._df2.columns
+
+    def lower_columns(self, df):
+        lower_columns = [str.lower(column) for column in df.columns]
+        df.columns = lower_columns
+        return df
+
+    def validate_dfs_cols(self, df):
+        if self._df2 is None:
+            raise HhopException("You must pass a second DF")
+        df1 = self.standardize_df(df)
+
+    def standardize_df(self, df):
+        self.lower_columns(df)
+        return self._df1
 
 
 class SCD2Helper(pyspark.sql.dataframe.DataFrame):
@@ -841,6 +867,9 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         if change_tech_col_names:
             self.tech_col_names.update(change_tech_col_names)
 
+        if "row_hash" not in self._df.columns:
+            self._df = self._df.withColumn("row_hash", F.lit(None).cast("string"))
+
         self._extra_attributes = (
             set(self._df.columns)
             - set(self._pk)
@@ -898,7 +927,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             ),
         ).select(
             *df_cols,
-            alias_tech_col_names("row_hash"),
+            # "row_hash",  # think how to handle this
             alias_tech_col_names("row_actual_from").cast("string"),
             alias_tech_col_names("row_actual_to").cast("string"),
         )
@@ -914,11 +943,6 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         if not len(cols):
             cols = [*self._pk, *self._non_pk]
         return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
-
-    def version_num(
-        self,
-    ):
-        pass
 
     def validate_scd2(self) -> namedtuple:
         """Validation of a SCD2 table
@@ -956,7 +980,16 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         self.df_invalid_dates = (
             self._df.withColumn("valid_date_from", is_valid_date("row_actual_from"))
             .withColumn("valid_date_to", is_valid_date("row_actual_to"))
-            .filter("valid_date_from is False or valid_date_to is false")
+            .withColumn(
+                "incorrect_direction",
+                F.coalesce(
+                    col("row_actual_from") > col("row_actual_to"),
+                    F.lit(False).cast("boolean"),
+                ),
+            )
+            .filter(
+                "valid_date_from is false or valid_date_to is false or incorrect_direction is true"
+            )
         )
         cnt_invalid_dates = self.df_invalid_dates.count()
         if cnt_invalid_dates != 0:
@@ -981,26 +1014,35 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             )
 
         # check if there are new versions with the same hash (extra version in this case is harmless but wrong)
-        window_pk_asc = W.partitionBy(*self._pk).orderBy(self._time_col)
-        df_hash_versions = self._df.withColumn(
-            "row_hash", self.hash_cols(*self._pk, *self._non_pk)
-        ).withColumn(
-            "version_num",
-            F.count(
-                F.when(F.lag("row_hash").over(window_pk_asc) != col("row_hash"), 1)
-            ).over(window_pk_asc),
-        )
-        pk_check_version = [*self._pk, "version_num"]
-        self.pk_by_version = DFExtender(
-            df_hash_versions, pk=pk_check_version, silent_mode=True
-        )
-        self.pk_by_version.get_info(pk_stats=True, null_stats=False)
-        cnt_duplicates_version = self.pk_by_versions.pk_stats[2]
-        if cnt_duplicates_version != 0:
-            print(
-                f"There are {cnt_duplicates_version} PK duplicates by {pk_check_version} "
-                "Look at `.pk_by_versions.df_duplicates_pk`"
+
+        if self._time_col:
+            window_pk_asc = W.partitionBy(*self._pk).orderBy(self._time_col)
+            df_hash_version = self._df.withColumn(
+                "row_hash", self.hash_cols(*self._pk, *self._non_pk)
+            ).withColumn(
+                "version_num",
+                F.count(
+                    F.when(
+                        F.lag("row_hash").over(window_pk_asc) != col("row_hash"), 1
+                    )  # should a hole in history create different versions?
+                ).over(window_pk_asc),
             )
+            pk_check_version = [*self._pk, "version_num"]
+            self.pk_by_version = DFExtender(
+                df_hash_version, pk=pk_check_version, silent_mode=True
+            )
+            self.pk_by_version.get_info(pk_stats=True, null_stats=False)
+            cnt_duplicates_version = self.pk_by_version.pk_stats[2]
+
+            if cnt_duplicates_version != 0:
+                print(
+                    f"There are {cnt_duplicates_version} PK duplicates by {pk_check_version} "
+                    "Look at `.pk_by_versions.df_duplicates_pk`"
+                )
+        else:  # do we really need time_col anyway?
+            print("time_col is not provided, checking duplicated versions is skipped")
+            cnt_duplicates_version = 1
+
         print(f"Number of records: {self.basic_pk_check.pk_stats[0]:,}")
 
         errors_scd2 = ErrorsInSCD2TableGenerator(
@@ -1251,6 +1293,8 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             DataFrame: joined DataFrame with SCD2 history
         """
         # TODO: check if dataframes have the same key and correct tech cols
+        instance1 = self
+        instance2 = df2
         df1, df2 = self._df.alias("df1"), df2.alias("df2")
 
         tech_attr = {"row_actual_from", "row_actual_to", "row_hash"}
@@ -1273,9 +1317,9 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         df_joined = df1.join(df2, on=cond_scd2_join, how=join_type)
 
         df_joined_scd2 = df_joined.select(
-            *[F.coalesce(f"df1.{pk_col}", f"df2.{pk_col}") for pk_col in self._pk],
-            *get_non_pk_attrs(df1),
-            *get_non_pk_attrs(df2),
+            *[F.coalesce(f"df1.{pk_col}", f"df2.{pk_col}").alias(pk_col) for pk_col in self._pk],
+            *get_non_pk_attrs(instance1),
+            *get_non_pk_attrs(instance2),
             greatest_from.alias("row_actual_from"),
             least_to.alias("row_actual_to"),
         )
