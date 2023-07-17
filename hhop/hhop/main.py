@@ -102,7 +102,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self.columns_diff_reordered_all = None
 
         super().__init__(
-            self._df._jdf, self._df.sql_ctx
+            self._df._jdf, self._df.sparkSession
         )  # magic to integrate pyspark DF into this class
 
         # get sorted dict with count + share without zero values
@@ -845,7 +845,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         }
 
         super().__init__(
-            df._jdf, df.sql_ctx
+            df._jdf, df.sparkSession
         )  # magic to integrate pyspark DF into this class
 
         # TODO: make every column lower
@@ -1317,7 +1317,10 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         df_joined = df1.join(df2, on=cond_scd2_join, how=join_type)
 
         df_joined_scd2 = df_joined.select(
-            *[F.coalesce(f"df1.{pk_col}", f"df2.{pk_col}").alias(pk_col) for pk_col in self._pk],
+            *[
+                F.coalesce(f"df1.{pk_col}", f"df2.{pk_col}").alias(pk_col)
+                for pk_col in self._pk
+            ],
             *get_non_pk_attrs(instance1),
             *get_non_pk_attrs(instance2),
             greatest_from.alias("row_actual_from"),
