@@ -1,11 +1,14 @@
 # HiveHelper_on_PySpark
  A very specific, but time-saving library for analyzing Hive tables using PySpark.
 
-It is tested on PySpark 3.1, 3.2
+The library is tested on PySpark 3.1, 3.2
 
-## How to install (might change)
+## How to install
 1. Clone repository
-2. `pip install -e .`
+2. `conda create -n my_env python=3.10`
+3. `conda activate my_env`
+4. `pip install -r requirements.txt`
+5. `pip install -e .`
 
 ## Features
 1. Getting info about a table based on Primary Key (PK) and count NULL values in columns
@@ -16,11 +19,11 @@ It is tested on PySpark 3.1, 3.2
 
 ## Quick links
 
-### [Full demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/demo.ipynb)
+### [Full demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/jupyter/demo.ipynb)
 
 ### [Code](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop)
 
-[Code in txt for bypassing email firewall](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop/txt)
+[Code in txt for bypassing email firewall](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop/hhop/txt)
 
 Email for any suggestions - 2point71828182846@gmail.com
 
@@ -324,7 +327,7 @@ df_dedup.show()
 
 
 ### TODO
-- [x] Setup local PySpark with Hive [1](https://codewitharjun.medium.com/install-hadoop-on-macos-efe7c860c3ed) [2](https://medium.com/@datacouch/how-to-set-up-spark-environment-on-mac-c1553005e1f4)
+- [x] Setup local PySpark with Hive (although it runs fine without Hive) [1](https://codewitharjun.medium.com/install-hadoop-on-macos-efe7c860c3ed) [2](https://medium.com/@datacouch/how-to-set-up-spark-environment-on-mac-c1553005e1f4)
 - [x] Synth table with partitions
 - [x] Basic testing script (testing inside .ipynb)
 - [x] How to extend Pyspark
@@ -340,6 +343,7 @@ df_dedup.show()
 - [x] Include custom values in NULLs check
 - [x] Add function write_read_table to make checkpoints
 - [x] Clean up attributes and methods in DFExtender and refactor something
-- [ ] Create a new class SCD2Helper to create, validate, update and join SCD2 tables
+- [x] Create a new class SCD2Helper to create, validate, update and join SCD2 tables
 - [x] Add automatic tests outside of .ipynb (coverage is very low, so is the available time)
 - [x] Enable linter and reformat code even more
+- [ ] Create class to help to compare pk of different tables and simplify routine operations inside functions

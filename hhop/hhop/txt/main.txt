@@ -102,7 +102,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         self.columns_diff_reordered_all = None
 
         super().__init__(
-            self._df._jdf, self._df.sparkSession
+            self._df._jdf,
+            self._df.sql_ctx,  # change sql_ctx to sparkSession in spark>=3.4
         )  # magic to integrate pyspark DF into this class
 
         # get sorted dict with count + share without zero values
@@ -784,30 +785,53 @@ ErrorsInSCD2TableGenerator = namedtuple(
 )
 
 
-class DFCleanerValidator:
+class DFCleaner:
     """WIP
     Helps with comparing and raising exceptions on columns of DFs
     """
 
-    def __init__(self, df1, df2=None):
-        self._df1 = df1
-        self._df2 = df2
-        self._df1_columns = self._df1.columns
-        self._df2_columns = self._df2.columns
+    def __init__(self, df, **group_cols):
+        self.df = df
 
-    def lower_columns(self, df):
-        lower_columns = [str.lower(column) for column in df.columns]
-        df.columns = lower_columns
-        return df
+        self._df_columns = self.lower_list(self.df.columns)
 
-    def validate_dfs_cols(self, df):
-        if self._df2 is None:
-            raise HhopException("You must pass a second DF")
-        df1 = self.standardize_df(df)
+    def lower_list(self, l):
+        lower_list = [str.lower(elem) for elem in l]
+        return lower_list
 
     def standardize_df(self, df):
         self.lower_columns(df)
-        return self._df1
+        return self.df
+
+    def remember_cols(self):
+        pass
+
+    def restore_cols(self):
+        pass
+
+    def mass_rename(self, group_cols, suffix, is_append_suffix):
+        pass
+
+    def tech_cols_something(self):
+        pass
+
+    def rename_to(self, old_new_mapping: dict):
+        self._old_new_mapping = old_new_mapping
+        for old, new in old_new_mapping.items():
+            self.df = self.df.withColumnRenamed(old, new)
+
+    def rename_back(self):
+        for old, new in self._old_new_mapping.items():
+            self.df = self.df.withColumnRenamed(new, old)
+
+
+class DFValidator:
+    def __init__(self) -> None:
+        pass
+
+    @classmethod
+    def compare_group_cols(cls, df1: DFCleaner, df2: DFCleaner, group_cols: list):
+        pass
 
 
 class SCD2Helper(pyspark.sql.dataframe.DataFrame):
@@ -819,7 +843,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         pk: List[str] = None,
         non_pk: List[str] = None,
         time_col: str = None,
-        change_tech_col_names: dict = None,
+        change_tech_col_names: list = None,
         BOW: str = "1000-01-01",
         EOW: str = "9999-12-31",
     ) -> "SCD2Helper":
@@ -830,7 +854,9 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             pk (List[str]): Primary Key. Defaults to empty list.
             non_pk (List[str]): Non key attributes, for which changes should be tracked
             time_col (str): Attribute which will be used for sorting and generating row_actual_from
-            change_tech_col_names (dict, optional): _description_. Defaults to None.
+            change_tech_col_names (dict, optional): _description_.
+                format [row_hash, row_actual_from, row_actual_to]
+                Defaults to None.
             BOW (str, optional): BeginningOfWorld. Defaults to "1000-01-01".
             EOW (str, optional): EndOfWorld. Defaults to "9999-12-31".
         """
@@ -845,7 +871,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         }
 
         super().__init__(
-            df._jdf, df.sparkSession
+            df._jdf, df.sql_ctx  # change sql_ctx to sparkSession in spark>=3.4
         )  # magic to integrate pyspark DF into this class
 
         # TODO: make every column lower
@@ -856,6 +882,8 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
 
         self._BOW = BOW
         self._EOW = EOW
+
+        self._inc_any_version = W.partitionBy(*self._pk).orderBy("row_actual_from")
         # make it namedtuple or list
         self.tech_col_names = {  # for quick change if needed
             "row_hash": "row_hash",
@@ -943,6 +971,31 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         if not len(cols):
             cols = [*self._pk, *self._non_pk]
         return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
+
+    def true_version_num(self):
+        df_version_num = (
+            self._df.withColumn(
+                "row_hash", self.hash_cols()
+            )  # hash of pk and essential non pk attributes
+            .withColumn("previous_to", F.lag("row_actual_to").over(inc_any_version))
+            .withColumn(
+                "diff_with_previous_hash",
+                F.lag("row_hash").over(inc_any_version) != col("row_hash"),
+            )
+            .withColumn(
+                "version_num",  # true version num
+                F.count(
+                    F.when(
+                        col("diff_with_previous_hash")
+                        | (
+                            col("row_actual_from") != F.date_add(col("previous_to"), 1)
+                        ),  # any hole in history also creates new version
+                        F.lit(1),
+                    )
+                ).over(inc_any_version),
+            )
+        )
+        return df_version_num
 
     def validate_scd2(self) -> namedtuple:
         """Validation of a SCD2 table
@@ -1200,10 +1253,20 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
 
         return SCD2Helper(df_merged_history, **self._passed_args)
 
-    def merge_scd2_update(self, df_new) -> "SCD2Helper":
+    def merge_scd2_update(
+        self, df_new: DataFrame, is_deduplicate_df=True
+    ) -> "SCD2Helper":
+        """_summary_
+
+        Args:
+            df_new (DataFrame): It must have the same key as main DF!
+                Otherwise the result will be incorrect
+
+        Returns:
+            SCD2Helper: _description_
+        """
         # TODO: raise error when cols are different or different PK
         # or there are no row_actual_from, row_actual_to
-
         common_cols = self._df.columns
         # df1_cols = set(self._df.columns)
         # df2_cols = set(self._df_ref.columns)
