@@ -6,6 +6,8 @@ from .hhop.funs import (
     union_all,
     deduplicate_df,
     get_table_location,
+    drop_table,
+    DEFAULT_SCHEMA_WRITE,
 )
 from .hhop.spark_init import get_spark_builder
 from .hhop.exceptions import HhopException

@@ -116,9 +116,7 @@ def __analyze_table_location(schema_table: str):
 def union_all(*dfs) -> DataFrame:
     """
     Shortcut function to union many tables
-
     Example: union_all(df1, df2, df3, df4)
-
     Returns:
         DataFrame: unioned DataFrame
     """
@@ -136,6 +134,7 @@ def write_table(
     table: str,
     schema: str = DEFAULT_SCHEMA_WRITE,
     mode: str = "overwrite",
+    rewrite: bool = False,
     format_files: str = "parquet",
     partition_cols: List[str] = None,
     verbose: bool = True,
@@ -151,33 +150,80 @@ def write_table(
         table (str): Name of the table (without schema)
         schema (str, optional): Name of the schema. Defaults to DEFAULT_SCHEMA_WRITE in this file.
         mode (str, optional): Mode to write (overwrite or append). Defaults to "overwrite".
-        format_files (str, optional): Format of files in HDFS. Defaults to "parquet".
-        partition_cols (List  |  Set  |  Tuple, optional): Partitioned columns of the table. Defaults to [].
+        rewrite (bool, optional): If True the existing table will be dropped from Hive and HDFS
+        format_files (str, optional): Format of files in HDFS. Only applied on creation of the table.
+            Defaults to "parquet".
+        partition_cols (Collection, optional): Partitioned columns of the table. Defaults to [].
+        verbose (bool, optional): choose if you want to get a message in stdout on write
 
     Raises:
         HhopException: raised if partition columns are not in the DF
     """
+    partition_cols = partition_cols or []
+
     schema_table = f"{schema}.{table}"
-    location_if_exists = get_table_location(schema_table)
+
+    if rewrite:
+        drop_table(schema_table)
+        location_if_exists = None
+    else:
+        location_if_exists = get_table_location(schema_table)
+
+    extra_columns = make_set_lower(partition_cols) - make_set_lower(df.columns)
+    if extra_columns:
+        raise HhopException(f"{extra_columns} are not in columns of provided DF")
+
+    try:  # select exact columns as existing table
+        cols_existing_table = read_table(schema_table).columns
+        df = df.select(
+            *cols_existing_table
+        )  # TODO: decide what to do if columns don't match: drop table, raise error,
+        # add a contant to the config of module?
+    except Exception as e:  # put partition cols at the end
+        # print(e)
+        df_cols_part_at_end = [
+            column for column in df.columns if column not in partition_cols
+        ] + partition_cols
+        df = df.select(*df_cols_part_at_end)
 
     df_save = df.write
 
     if location_if_exists:
         # it allows to rewrite files if location of to-be-written table is not empty
         df_save = df_save.option("path", location_if_exists)
+    else:
+        derived_schema = df.schema
+        empty_df = spark().createDataFrame([], derived_schema)  # create empty table
+        empty_df_save = empty_df.write.format(format_files)
+        if partition_cols:
+            empty_df_save = empty_df_save.partitionBy(partition_cols)
+        empty_df_save.saveAsTable(schema_table)
 
-    df_save = df_save.mode(mode).format(format_files)
-
-    extra_columns = make_set_lower(partition_cols) - make_set_lower(df.columns)
-    if extra_columns:
-        raise HhopException(f"{extra_columns} are not in columns of provided DF")
-
-    if partition_cols:
-        df_save = df_save.partitionBy(partition_cols)
-    df_save.saveAsTable(schema_table)
+    df_save.insertInto(schema_table, overwrite=(True if mode == "overwrite" else False))
 
     if verbose:
         print(f"DF saved as {schema_table}")
+
+
+def drop_table(table_name, drop_hdfs=True, if_exists=True, verbose=False):
+    """This function drops a Hive table and cleans up hdfs folder if it exists"""
+    if drop_hdfs:
+        table_location = get_table_location(table_name)
+        shell_command = f"hdfs dfs -rm -r {table_location}"
+        if table_location:
+            delete_table_output = subprocess.getoutput(shell_command)
+            if verbose:
+                print("shell output:", delete_table_output)
+
+    if_exists_str = ""
+    if if_exists:
+        if_exists_str = "if exists"
+    # without if exists it will throw an exception if it really doesn't exist
+    spark().sql(f"drop table {if_exists_str} {table_name}")
+    if verbose:
+        print("table_location:", table_location)
+        print(f"shell command: {shell_command}")
+        print(f"sql query: drop table {if_exists_str} {table_name}")
 
 
 def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):
@@ -201,6 +247,8 @@ def write_read_table(df_write: DataFrame, *write_args, **write_kwargs) -> DataFr
     """Function for making checkpoints by applying
     1. write_table with provided write_args and write_kwargs
     2. read_table with default values
+
+    Afterthought: Does it really need to be that complex?
     """
     write_table(df_write, *write_args, **write_kwargs)
 
