@@ -3,6 +3,7 @@ from functools import reduce
 import subprocess
 import inspect
 from typing import List, Set, Tuple
+import re
 
 
 from pyspark.sql import DataFrame
@@ -123,12 +124,6 @@ def union_all(*dfs) -> DataFrame:
     return reduce(DataFrame.unionByName, dfs)
 
 
-def make_set_lower(iterable):
-    if iterable is None:
-        iterable = {}
-    return {i.lower() for i in iterable}
-
-
 def write_table(
     df: DataFrame,
     table: str,
@@ -169,9 +164,8 @@ def write_table(
     else:
         location_if_exists = get_table_location(schema_table)
 
-    extra_columns = make_set_lower(partition_cols) - make_set_lower(df.columns)
-    if extra_columns:
-        raise HhopException(f"{extra_columns} are not in columns of provided DF")
+    # raise an exception if partition_cols do not exist in DF
+    _ = DFColCleaner(df, partition_cols=partition_cols)
 
     try:  # select exact columns as existing table
         cols_existing_table = read_table(schema_table).columns
@@ -286,3 +280,189 @@ def safely_write_table():
     2. remove table in the target location (files are going to trash)
     3. move files from a temp location to the target location"""
     pass
+
+
+class DFColCleaner:
+    """WIP
+    Helps with comparing and raising exceptions on columns of DFs
+    """
+
+    def __init__(self, df, **group_cols: List[str]):
+        """_summary_
+
+        Args:
+            df (_type_): _description_
+            **group_cols (List[str]): groups with lists of columns
+
+        Raises:
+            HhopException: _description_
+        """
+        self.df = df
+
+        df_columns = self.lower_list(self.df.columns)
+        # will throw an exception on duplicated groups
+        _ = self.lower_list(group_cols.keys(), type_error="column groups")
+
+        all_columns_set = set(df_columns)  # for N(1) check of entry
+        not_in_all_columns = set()  # raise error if not empty
+        group_cols_clean = {}  # new dict with lower columns and groups
+        for group, cols in group_cols.items():
+            group = group.lower()
+            columns_in_group = []
+            for column in cols:
+                column = column.lower()
+                if column not in all_columns_set:
+                    not_in_all_columns.add(column)
+                columns_in_group.append(column)
+            group_cols_clean[group] = self.lower_list(columns_in_group)
+        if not_in_all_columns:
+            raise HhopException(
+                f"Columns {not_in_all_columns} not in the DF: {df_columns}"
+            )
+
+        # this adds groups: all and extra
+        group_cols_clean = {
+            str.lower(group): [str.lower(column) for column in cols]
+            for group, cols in group_cols_clean.items()
+        }  # to lower columns in groups
+        group_cols_clean["all"] = df_columns
+        group_cols_clean["extra"] = list(
+            set(df_columns)
+            - set(
+                [
+                    c
+                    for cg in group_cols_clean
+                    for c in group_cols_clean[cg]
+                    if cg != "all"
+                ]
+            )
+        )
+        self.group_cols = group_cols_clean
+
+    @staticmethod
+    def lower_list(cols, type_error="columns"):
+        lower_list = [str.lower(elem) for elem in cols]
+
+        seen = set()
+        dupes = [x for x in lower_list if x in seen or seen.add(x)]
+        if dupes:
+            raise HhopException(f"Found duplicates {type_error}: {dupes}")
+
+        return lower_list
+
+    @classmethod
+    def get_columns_with_suffix(cls, df, suffix):
+        df_cols = cls.lower_list(df.columns)
+        cols_with_suffix = []
+        for column in df_cols:
+            if re.match(rf"[\w_\d]+{suffix}$", column):
+                cols_with_suffix.append(column)
+        return cols_with_suffix
+
+    def mass_rename(
+        self, suffix, is_append_suffix, group_cols_include=None, group_cols_exclude=None
+    ):
+        cols_to_rename = self.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        dict_rename = {}
+        if is_append_suffix:
+            new_colname = lambda x: x + suffix
+        else:
+            new_colname = lambda x: re.sub(rf"{suffix}$", "", x)
+        for column in cols_to_rename:
+            dict_rename[column] = new_colname(column)
+
+        df = self.rename_to(self.df, dict_rename)
+        return df
+
+    @staticmethod
+    def rename_to(df, old_new_mapping: dict):
+        for old, new in old_new_mapping.items():
+            df = df.withColumnRenamed(old, new)
+        return df
+
+    def get_columns_from_groups(
+        self, group_cols_include=None, group_cols_exclude=None
+    ) -> set:
+        group_cols_include = self.lower_list(
+            group_cols_include or ["all"], type_error="column groups"
+        )  # all is default
+        group_cols_exclude = self.lower_list(
+            group_cols_exclude or [], type_error="column groups"
+        )
+        cols_out = set()
+        for gc_include in group_cols_include:
+            _ = [cols_out.add(column) for column in self.group_cols[gc_include]]
+            for gc_exclude in group_cols_exclude:
+                for column in self.group_cols[gc_exclude]:
+                    try:
+                        cols_out.remove(column)
+                    except KeyError:
+                        continue
+        return cols_out
+
+    def is_cols_subset(
+        self, cols, group_cols_include=None, group_cols_exclude=None
+    ) -> bool:
+        cols_in_groups = self.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        cols_left = set(cols) - cols_in_groups
+        return len(cols_left) == 0
+
+
+class DFColValidator:
+    "To validate 2 dataframes from class DFColCleaner"
+
+    def __init__(self, obj1, obj2) -> None:
+        self.obj1 = obj1
+        self.obj2 = obj2
+
+    def get_cols_on_groups(self, group_cols_include=None, group_cols_exclude=None):
+        cols1 = self.obj1.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        cols2 = self.obj2.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        return cols1, cols2
+
+    def _compare_groups(
+        self, operator, group_cols_include=None, group_cols_exclude=None
+    ):
+        cols1, cols2 = self.get_cols_on_groups(group_cols_include, group_cols_exclude)
+        return operator(cols1, cols2)
+
+    # this looks like something can be done to simplify methods
+    def get_intersection_groups(self, group_cols_include=None, group_cols_exclude=None):
+        return self._compare_groups(
+            set.intersection,
+            group_cols_include=group_cols_include,
+            group_cols_exclude=group_cols_exclude,
+        )
+
+    def get_union_groups(self, group_cols_include=None, group_cols_exclude=None):
+        return self._compare_groups(
+            set.union,
+            group_cols_include=group_cols_include,
+            group_cols_exclude=group_cols_exclude,
+        )
+
+    def get_xor_groups(self, group_cols_include=None, group_cols_exclude=None):
+        return self._compare_groups(
+            set.__xor__,
+            group_cols_include=group_cols_include,
+            group_cols_exclude=group_cols_exclude,
+        )
+
+    def is_equal_cols_groups(
+        self, group_cols_include=None, group_cols_exclude=None, raise_exception=False
+    ):
+        is_equal = len(self.get_xor_groups(group_cols_include, group_cols_exclude)) == 0
+        if raise_exception and not is_equal:
+            raise HhopException(
+                f"Groups in 2 DF are not equal. Groups: {group_cols_include} minus {group_cols_exclude}"
+                "Use methods get_TYPE_groups or get_cols_on_groups"
+            )
+        return is_equal

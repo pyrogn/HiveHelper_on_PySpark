@@ -1,4 +1,9 @@
-from .hhop.main import DFExtender, SchemaManager, TablePartitionDescriber, SCD2Helper
+from .hhop.main import (
+    DFExtender,
+    SchemaManager,
+    TablePartitionDescriber,
+    SCD2Helper,
+)
 from .hhop.funs import (
     read_table,
     write_table,

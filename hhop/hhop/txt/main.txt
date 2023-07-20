@@ -15,12 +15,14 @@ from pyspark.sql.types import NumericType
 
 from .funs import (
     read_table,
-    make_set_lower,
     deduplicate_df,
     union_all,
     write_read_table,
     DEFAULT_SCHEMA_WRITE,
+    DFColCleaner,
+    DFColValidator,
 )
+
 from .exceptions import HhopException
 from .spark_init import get_spark_builder
 
@@ -32,6 +34,7 @@ spark = lambda: get_spark_builder().getOrCreate()
 DICT_PRINT_MAX_LEN = 15
 # fraction digits to round in method compare_tables()
 SCALE_OF_NUMBER_IN_COMPARING = 2
+
 
 PkStatsGenerator = namedtuple(
     "PK_stats", "cnt_rows unique_pk_cnt pk_with_duplicates_pk"
@@ -149,7 +152,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         """
 
         if self._pk:
-            self.__check_cols_entry(self._pk, self._df.columns)
+            # raise an exception if partition_cols do not exist in DF
+            _ = DFColCleaner(self._df, pk=self._pk)
         if len(self._df.head(1)) == 0:
             raise HhopException("DF is empty")
 
@@ -294,7 +298,8 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             self._s_print("Running method .get_info() first", end="\n")
             self.get_info(pk_stats=False)
 
-        self.__check_cols_entry(null_columns, self._df.columns)
+        # raise an exception if partition_cols do not exist in DF
+        _ = DFColCleaner(self._df, null_columns=null_columns)
 
         if self.dict_null_in_cols:
             if set(null_columns) & set(self.dict_null_in_cols):
@@ -369,11 +374,16 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         )
         # might want to create a class to compare and find columns of 2 DF,
         # because this functionality is applied in the script at least 3 times
-        df1_cols = set(self._df.columns)
-        df2_cols = set(self._df_ref.columns)
-        self._common_cols = (df1_cols & df2_cols) - set(self._pk)
-        self._df1_extracols = df1_cols - self._common_cols - set(self._pk)
-        self._df2_extracols = df2_cols - self._common_cols - set(self._pk)
+        df_c1 = DFColCleaner(self._df, pk=self._pk)
+        df_c2 = DFColCleaner(self._df_ref, pk=self._pk)
+        compare_cols = DFColValidator(df_c1, df_c2)
+
+        true_common_cols = compare_cols.get_intersection_groups(["all"])
+        self._common_cols = compare_cols.get_intersection_groups(["all"], ["pk"])
+        df1_cols = df_c1.get_columns_from_groups(["all"])
+        df2_cols = df_c2.get_columns_from_groups(["all"])
+        self._df1_extracols = df1_cols - true_common_cols
+        self._df2_extracols = df2_cols - true_common_cols
 
         self._diff_postfix, self._sum_postfix = "_is_diff", "_sum_error"
         self._columns_diff_postfix = [
@@ -575,18 +585,6 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         return CompareTablesPkStatsGenerator(*cnt_results)
 
-    def __check_cols_entry(self, cols_subset, cols_all):
-        """
-        Raise exception if provided columns are not in DF
-        """
-
-        extra_columns = make_set_lower(cols_subset) - make_set_lower(cols_all)
-
-        if extra_columns:
-            raise HhopException(
-                f"columns {extra_columns} are not present in provided columns: {cols_all}"
-            )
-
     def __round_numberic_cols_df(
         self, df, fraction_digits=SCALE_OF_NUMBER_IN_COMPARING
     ):
@@ -784,193 +782,6 @@ ErrorsInSCD2TableGenerator = namedtuple(
     "Errors_In_SCD2_table",
     "duplicates_by_pk invalid_dates broken_history duplicates_by_version",
 )
-
-
-class DFColCleaner:
-    """WIP
-    Helps with comparing and raising exceptions on columns of DFs
-    """
-
-    def __init__(self, df, **group_cols: List[str]):
-        """_summary_
-
-        Args:
-            df (_type_): _description_
-            **group_cols (List[str]): groups with lists of columns
-
-        Raises:
-            HhopException: _description_
-        """
-        self.df = df
-
-        df_columns = self.lower_list(self.df.columns)
-        # will throw an exception on duplicated groups
-        _ = self.lower_list(group_cols.keys(), type_error="column groups")
-
-        all_columns_set = set(df_columns)  # for N(1) check of entry
-        not_in_all_columns = set()  # raise error if not empty
-        group_cols_clean = {}  # new dict with lower columns and groups
-        for group, cols in group_cols.items():
-            group = group.lower()
-            columns_in_group = []
-            for column in cols:
-                column = column.lower()
-                if column not in all_columns_set:
-                    not_in_all_columns.add(column)
-                columns_in_group.append(column)
-            group_cols_clean[group] = self.lower_list(columns_in_group)
-        if not_in_all_columns:
-            raise HhopException(
-                f"Columns {not_in_all_columns} not in the DF: {df_columns}"
-            )
-
-        # this adds groups: all and extra
-        group_cols_clean = {
-            str.lower(group): [str.lower(column) for column in cols]
-            for group, cols in group_cols_clean.items()
-        }  # to lower columns in groups
-        group_cols_clean["all"] = df_columns
-        group_cols_clean["extra"] = list(
-            set(df_columns)
-            - set(
-                [
-                    c
-                    for cg in group_cols_clean
-                    for c in group_cols_clean[cg]
-                    if cg != "all"
-                ]
-            )
-        )
-        self.group_cols = group_cols_clean
-
-    def lower_list(self, cols, type_error="columns"):
-        lower_list = [str.lower(elem) for elem in cols]
-
-        seen = set()
-        dupes = [x for x in lower_list if x in seen or seen.add(x)]
-        if dupes:
-            raise HhopException(f"Found duplicates {type_error}: {dupes}")
-
-        return lower_list
-
-    def mass_rename(
-        self, suffix, is_append_suffix, group_cols_include=None, group_cols_exclude=None
-    ):
-        cols_to_rename = self.get_columns_from_groups(
-            group_cols_include, group_cols_exclude
-        )
-        dict_rename = {}
-        if is_append_suffix:
-            new_colname = lambda x: x + suffix
-        else:
-            new_colname = lambda x: re.sub(rf"{suffix}$", "", x)
-        for column in cols_to_rename:
-            dict_rename[column] = new_colname(column)
-            print(column, new_colname(column))
-
-        df = self.rename_to(self.df, dict_rename)
-        return df
-
-    @staticmethod
-    def rename_to(df, old_new_mapping: dict):
-        for old, new in old_new_mapping.items():
-            df = df.withColumnRenamed(old, new)
-        return df
-
-    def get_columns_from_groups(
-        self, group_cols_include=None, group_cols_exclude=None
-    ) -> set:
-        group_cols_include = self.lower_list(
-            group_cols_include or ["all"], type_error="column groups"
-        )  # all is default
-        group_cols_exclude = self.lower_list(
-            group_cols_exclude or [], type_error="column groups"
-        )
-        cols_out = set()
-        for gc_include in group_cols_include:
-            _ = [cols_out.add(column) for column in self.group_cols[gc_include]]
-            for gc_exclude in group_cols_exclude:
-                for column in self.group_cols[gc_exclude]:
-                    try:
-                        cols_out.remove(column)
-                    except KeyError:
-                        continue
-        return cols_out
-
-    def is_cols_subset(
-        self, cols, group_cols_include=None, group_cols_exclude=None
-    ) -> bool:
-        cols_in_groups = self.get_columns_from_groups(
-            group_cols_include, group_cols_exclude
-        )
-        cols_left = set(cols) - cols_in_groups
-        return len(cols_left) == 0
-
-
-def set_operator(set_operator):
-    def operator_decorator(func):
-        # @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            # print(args, kwargs)
-            # print(*args, **kwargs)
-            # res = func(self)
-            return self._compare_groups(operator=set_operator, *args, **kwargs)
-
-        return wrapper
-
-    return operator_decorator
-
-
-class DFColValidator:
-    "To validate 2 dataframes from class DFColCleaner"
-
-    def __init__(self, obj1, obj2) -> None:
-        self.obj1 = obj1
-        self.obj2 = obj2
-
-    def _get_cols_on_groups(self, group_cols_include=None, group_cols_exclude=None):
-        cols1 = self.obj1.get_columns_from_groups(
-            group_cols_include, group_cols_exclude
-        )
-        cols2 = self.obj2.get_columns_from_groups(
-            group_cols_include, group_cols_exclude
-        )
-        return cols1, cols2
-
-    def _compare_groups(
-        self, operator, group_cols_include=None, group_cols_exclude=None
-    ):
-        cols1, cols2 = self._get_cols_on_groups(group_cols_include, group_cols_exclude)
-        return operator(cols1, cols2)
-
-    @set_operator(set.intersection)
-    def get_intersection_groups(self):
-        None
-
-    @set_operator(set.__xor__)
-    def get_xor_groups(self):
-        None
-
-    @set_operator(set.union)
-    def get_union_groups(self, group_cols_include=None, group_cols_exclude=None):
-        res = self._compare_groups(group_cols_include, group_cols_exclude)
-        return res
-
-    @set_operator(set.__xor__)
-    def xor_cols_groups(self, group_cols_include=None, group_cols_exclude=None):
-        res = self._compare_groups(group_cols_include, group_cols_exclude)
-        return res
-
-    def is_equal_cols_groups(self, group_cols_include=None, group_cols_exclude=None):
-        return self.xor_cols_groups(group_cols_include, group_cols_exclude) != 0
-
-    def compare_group_cols(cls, df1: DFColCleaner, df2: DFColCleaner, group_cols: list):
-        pass
-
-    @staticmethod
-    def compare_iterables(it1, it2, raise_exception=False):
-        it1, it2 = set(it1), set(it2)
-        diff = it1 - it2  # and vice versa
 
 
 class SCD2Helper(pyspark.sql.dataframe.DataFrame):
