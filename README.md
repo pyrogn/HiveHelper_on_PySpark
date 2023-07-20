@@ -10,6 +10,11 @@ The library is tested on PySpark 3.1, 3.2
 4. `pip install -r requirements.txt`
 5. `pip install -e .`
 
+### How to rename all txt to py (and back) in Unix
+1. `unzip some_zip.zip`
+2. `find ./ -depth -name "*.txt" -exec sh -c 'mv "$1" "${1%.txt}.py"' _ {} \;`
+[credits to](https://stackoverflow.com/a/65957034)
+
 ## Features
 1. Getting info about a table based on Primary Key (PK) and count NULL values in columns
 2. Comparing a table with a reference table by PK

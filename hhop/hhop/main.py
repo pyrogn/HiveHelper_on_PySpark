@@ -1,5 +1,6 @@
 "main module with helpers"
-from functools import reduce
+from functools import reduce, wraps
+import re
 from operator import add
 from collections import namedtuple
 from typing import List
@@ -104,7 +105,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         super().__init__(
             self._df._jdf,
             self._df.sql_ctx,  # change sql_ctx to sparkSession in spark>=3.4
-        )  # magic to integrate pyspark DF into this class
+        )  # magic to integrate pyspark DF methods into this class
 
         # get sorted dict with count + share without zero values
         self._get_sorted_dict = lambda dict, val: {
@@ -288,8 +289,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 Returns a DF sorted by count of nulls in selected columns
                 in descending order
         """
-        if null_columns is None:
-            null_columns = []
+        null_columns = null_columns or []
         if not hasattr(self, "dict_null_in_cols"):
             self._s_print("Running method .get_info() first", end="\n")
             self.get_info(pk_stats=False)
@@ -334,11 +334,11 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         Attrs:
             dict_cols_with_errors - dictionary with count of errors in non PK attributes
-            df_with_errors - df with errors.
             matching_stats - namedtuple with stats on matching by pk columns
             dict_cols_with_errors - dict with aggregated errors by non-pk columns
                 All numeric columns in DFs get rounded with scale specified in
                     SCALE_OF_NUMBER_IN_COMPARING
+            df_with_errors - df with errors.
                 Added attributes:
                     is_joined_main - 1 if this PK in main DF, NULL otherwise
                     is_joined_ref - 1 if this PK in reference DF, NULL otherwise
@@ -346,7 +346,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                         otherwise 0
                     sum_errors - sum of all errors in a row. Doesn't exist
                         if there are no errors in non PK attributes.
-                It is not cached, write it to Hive or cache it with filters!
+                It is not cached, write it to Hive or cache it with filter, select!
         """
         if not self._pk:
             raise HhopException("No PK is provided")
@@ -434,6 +434,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
 
         def add_column_is_diff(df, column):
             """Filter for detecting differences in non PK attributes"""
+            # to save memory zero value may be changed to NULL
             cond_diff = f"""case
                 when
                     ({self._dummy1} is null or {self._dummy2} is null)
@@ -511,7 +512,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
                 put_postfix_columns,
                 self._df2_extracols,
                 ["ref"] * len(self._df2_extracols),
-                [False] * len(self._df1_extracols),
+                [False] * len(self._df2_extracols),
             ),
         )
 
@@ -785,53 +786,191 @@ ErrorsInSCD2TableGenerator = namedtuple(
 )
 
 
-class DFCleaner:
+class DFColCleaner:
     """WIP
     Helps with comparing and raising exceptions on columns of DFs
     """
 
-    def __init__(self, df, **group_cols):
+    def __init__(self, df, **group_cols: List[str]):
+        """_summary_
+
+        Args:
+            df (_type_): _description_
+            **group_cols (List[str]): groups with lists of columns
+
+        Raises:
+            HhopException: _description_
+        """
         self.df = df
 
-        self._df_columns = self.lower_list(self.df.columns)
+        df_columns = self.lower_list(self.df.columns)
+        # will throw an exception on duplicated groups
+        _ = self.lower_list(group_cols.keys(), type_error="column groups")
 
-    def lower_list(self, l):
-        lower_list = [str.lower(elem) for elem in l]
+        all_columns_set = set(df_columns)  # for N(1) check of entry
+        not_in_all_columns = set()  # raise error if not empty
+        group_cols_clean = {}  # new dict with lower columns and groups
+        for group, cols in group_cols.items():
+            group = group.lower()
+            columns_in_group = []
+            for column in cols:
+                column = column.lower()
+                if column not in all_columns_set:
+                    not_in_all_columns.add(column)
+                columns_in_group.append(column)
+            group_cols_clean[group] = self.lower_list(columns_in_group)
+        if not_in_all_columns:
+            raise HhopException(
+                f"Columns {not_in_all_columns} not in the DF: {df_columns}"
+            )
+
+        # this adds groups: all and extra
+        group_cols_clean = {
+            str.lower(group): [str.lower(column) for column in cols]
+            for group, cols in group_cols_clean.items()
+        }  # to lower columns in groups
+        group_cols_clean["all"] = df_columns
+        group_cols_clean["extra"] = list(
+            set(df_columns)
+            - set(
+                [
+                    c
+                    for cg in group_cols_clean
+                    for c in group_cols_clean[cg]
+                    if cg != "all"
+                ]
+            )
+        )
+        self.group_cols = group_cols_clean
+
+    def lower_list(self, cols, type_error="columns"):
+        lower_list = [str.lower(elem) for elem in cols]
+
+        seen = set()
+        dupes = [x for x in lower_list if x in seen or seen.add(x)]
+        if dupes:
+            raise HhopException(f"Found duplicates {type_error}: {dupes}")
+
         return lower_list
 
-    def standardize_df(self, df):
-        self.lower_columns(df)
-        return self.df
+    def mass_rename(
+        self, suffix, is_append_suffix, group_cols_include=None, group_cols_exclude=None
+    ):
+        cols_to_rename = self.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        dict_rename = {}
+        if is_append_suffix:
+            new_colname = lambda x: x + suffix
+        else:
+            new_colname = lambda x: re.sub(rf"{suffix}$", "", x)
+        for column in cols_to_rename:
+            dict_rename[column] = new_colname(column)
+            print(column, new_colname(column))
 
-    def remember_cols(self):
-        pass
+        df = self.rename_to(self.df, dict_rename)
+        return df
 
-    def restore_cols(self):
-        pass
-
-    def mass_rename(self, group_cols, suffix, is_append_suffix):
-        pass
-
-    def tech_cols_something(self):
-        pass
-
-    def rename_to(self, old_new_mapping: dict):
-        self._old_new_mapping = old_new_mapping
+    @staticmethod
+    def rename_to(df, old_new_mapping: dict):
         for old, new in old_new_mapping.items():
-            self.df = self.df.withColumnRenamed(old, new)
+            df = df.withColumnRenamed(old, new)
+        return df
 
-    def rename_back(self):
-        for old, new in self._old_new_mapping.items():
-            self.df = self.df.withColumnRenamed(new, old)
+    def get_columns_from_groups(
+        self, group_cols_include=None, group_cols_exclude=None
+    ) -> set:
+        group_cols_include = self.lower_list(
+            group_cols_include or ["all"], type_error="column groups"
+        )  # all is default
+        group_cols_exclude = self.lower_list(
+            group_cols_exclude or [], type_error="column groups"
+        )
+        cols_out = set()
+        for gc_include in group_cols_include:
+            _ = [cols_out.add(column) for column in self.group_cols[gc_include]]
+            for gc_exclude in group_cols_exclude:
+                for column in self.group_cols[gc_exclude]:
+                    try:
+                        cols_out.remove(column)
+                    except KeyError:
+                        continue
+        return cols_out
+
+    def is_cols_subset(
+        self, cols, group_cols_include=None, group_cols_exclude=None
+    ) -> bool:
+        cols_in_groups = self.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        cols_left = set(cols) - cols_in_groups
+        return len(cols_left) == 0
 
 
-class DFValidator:
-    def __init__(self) -> None:
+def set_operator(set_operator):
+    def operator_decorator(func):
+        # @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            # print(args, kwargs)
+            # print(*args, **kwargs)
+            # res = func(self)
+            return self._compare_groups(operator=set_operator, *args, **kwargs)
+
+        return wrapper
+
+    return operator_decorator
+
+
+class DFColValidator:
+    "To validate 2 dataframes from class DFColCleaner"
+
+    def __init__(self, obj1, obj2) -> None:
+        self.obj1 = obj1
+        self.obj2 = obj2
+
+    def _get_cols_on_groups(self, group_cols_include=None, group_cols_exclude=None):
+        cols1 = self.obj1.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        cols2 = self.obj2.get_columns_from_groups(
+            group_cols_include, group_cols_exclude
+        )
+        return cols1, cols2
+
+    def _compare_groups(
+        self, operator, group_cols_include=None, group_cols_exclude=None
+    ):
+        cols1, cols2 = self._get_cols_on_groups(group_cols_include, group_cols_exclude)
+        return operator(cols1, cols2)
+
+    @set_operator(set.intersection)
+    def get_intersection_groups(self):
+        None
+
+    @set_operator(set.__xor__)
+    def get_xor_groups(self):
+        None
+
+    @set_operator(set.union)
+    def get_union_groups(self, group_cols_include=None, group_cols_exclude=None):
+        res = self._compare_groups(group_cols_include, group_cols_exclude)
+        return res
+
+    @set_operator(set.__xor__)
+    def xor_cols_groups(self, group_cols_include=None, group_cols_exclude=None):
+        res = self._compare_groups(group_cols_include, group_cols_exclude)
+        return res
+
+    def is_equal_cols_groups(self, group_cols_include=None, group_cols_exclude=None):
+        return self.xor_cols_groups(group_cols_include, group_cols_exclude) != 0
+
+    def compare_group_cols(cls, df1: DFColCleaner, df2: DFColCleaner, group_cols: list):
         pass
 
-    @classmethod
-    def compare_group_cols(cls, df1: DFCleaner, df2: DFCleaner, group_cols: list):
-        pass
+    @staticmethod
+    def compare_iterables(it1, it2, raise_exception=False):
+        it1, it2 = set(it1), set(it2)
+        diff = it1 - it2  # and vice versa
 
 
 class SCD2Helper(pyspark.sql.dataframe.DataFrame):
@@ -847,7 +986,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         BOW: str = "1000-01-01",
         EOW: str = "9999-12-31",
     ) -> "SCD2Helper":
-        """_summary_
+        """Pass correct configs to use for the provided DF
 
         Args:
             df (DataFrame): _description_
@@ -913,7 +1052,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             non
         """
         if not self._time_col:
-            raise HhopException("time_col is a required parameters")
+            raise HhopException("time_col is a required parameter")
 
         df_cols = self._df.columns
 
@@ -945,7 +1084,9 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
 
         window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
 
-        alias_tech_col_names = lambda x: col(x).alias(self.tech_col_names[x])
+        alias_tech_col_names = lambda x: col(x).alias(
+            self.tech_col_names[x]
+        )  # TODO: remove it
 
         df_result = df_ded_by_date.withColumn(
             "row_actual_to",
@@ -955,14 +1096,14 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             ),
         ).select(
             *df_cols,
-            # "row_hash",  # think how to handle this
+            # "row_hash",  # TODO: think how to handle this
             alias_tech_col_names("row_actual_from").cast("string"),
             alias_tech_col_names("row_actual_to").cast("string"),
         )
 
         return SCD2Helper(
             df_result, **self._passed_args
-        )  # return same class with updated DF
+        )  # return same class with updated DF, is there a better way of doing this?
 
     def hash_cols(self, *cols):
         """MD5 hash of pk+non_pk columns by default.
@@ -973,6 +1114,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
 
     def true_version_num(self):
+        inc_any_version = W.partitionBy(*self._pk).orderBy("row_actual_from")
         df_version_num = (
             self._df.withColumn(
                 "row_hash", self.hash_cols()
@@ -1302,8 +1444,10 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         )
         # writing stg table to save many reads of source table
         stg_table_name = f"{DEFAULT_SCHEMA_WRITE}.hhop_stg_merged_scd2_{os.getpid()}"
-        spark().sql(f"drop table if exists {stg_table_name}")
-        df_merged = write_read_table(df_merged, stg_table_name)
+        # drop_table is done inside write_table using flag rewrite
+        df_merged = write_read_table(
+            df_merged, stg_table_name, rewrite=True, verbose=False
+        )
 
         df_close = (
             df_merged.filter(col("operation_type") == "close")

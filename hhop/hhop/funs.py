@@ -63,7 +63,7 @@ def read_table(
 
     # table_location + count parquet files
     if cnt_files:
-        __analyze_table_location(schema_table=schema_table)
+        _analyze_table_location(schema_table=schema_table)
     return df
 
 
@@ -86,7 +86,7 @@ def get_table_location(schema_table: str):
         return None
 
 
-def __analyze_table_location(schema_table: str):
+def _analyze_table_location(schema_table: str):
     """
     Function finds a table location and counts number of parquet files
     Args:
@@ -205,8 +205,18 @@ def write_table(
         print(f"DF saved as {schema_table}")
 
 
-def drop_table(table_name, drop_hdfs=True, if_exists=True, verbose=False):
-    """This function drops a Hive table and cleans up hdfs folder if it exists"""
+def drop_table(
+    table_name, drop_hdfs: bool = True, if_exists: bool = True, verbose: bool = False
+):
+    """This function drops a Hive table and cleans up hdfs folder if it exists
+
+    Args:
+        table_name (_type_): _description_
+        drop_hdfs (bool, optional): _description_. Defaults to True.
+        if_exists (bool, optional): _description_. Defaults to True.
+        verbose (bool, optional): _description_. Defaults to False.
+    """
+
     if drop_hdfs:
         table_location = get_table_location(table_name)
         shell_command = f"hdfs dfs -rm -r {table_location}"
@@ -227,11 +237,11 @@ def drop_table(table_name, drop_hdfs=True, if_exists=True, verbose=False):
 
 
 def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):
-    """Function to deduplicate DF using row_number function
+    """Function to deduplicate DF using row_number function so DF will have provided pk as Primary Key
     Attrs:
         df: Spark DF
-        pk: list of future PK columns. Example: ['pk1', 'pk2']
-        order_by_cols: list of columns to do order_by.
+        pk: list of desired PK columns. Example: ['pk1', 'pk2']
+        order_by_cols: list of columns to do order_by. You may use strings, but default order is ascending
             Example: [col('val1'), col('val2').desc()]
     """
     window_rn = W.partitionBy(pk).orderBy(order_by_cols)

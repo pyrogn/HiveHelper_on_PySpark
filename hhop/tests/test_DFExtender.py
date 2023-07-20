@@ -40,6 +40,7 @@ def read_synth_df(table_name, subfolder=None):
 
 @pytest.mark.skip()
 def is_exact_dfs(df1, df2, pk: List[str]) -> bool:
+    # add check on columns
     df1_check = DFExtender(df1, pk=pk)
     df1_check.compare_tables(df2)
 
