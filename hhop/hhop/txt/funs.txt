@@ -298,7 +298,7 @@ class DFColCleaner:
             HhopException: _description_
         """
         self.df = df
-
+        group_cols = {key: value or [] for key, value in group_cols.items()}
         df_columns = self.lower_list(self.df.columns)
         # will throw an exception on duplicated groups
         _ = self.lower_list(group_cols.keys(), type_error="column groups")
@@ -384,22 +384,23 @@ class DFColCleaner:
 
     def get_columns_from_groups(
         self, group_cols_include=None, group_cols_exclude=None
-    ) -> set:
+    ) -> List:
         group_cols_include = self.lower_list(
             group_cols_include or ["all"], type_error="column groups"
         )  # all is default
         group_cols_exclude = self.lower_list(
             group_cols_exclude or [], type_error="column groups"
         )
-        cols_out = set()
+        # suboptimal solution, but order of columns is saved
+        cols_exclude = set()
+        for gc_exclude in group_cols_exclude:
+            for column in self.group_cols[gc_exclude]:
+                cols_exclude.add(column)
+        cols_out = []
         for gc_include in group_cols_include:
-            _ = [cols_out.add(column) for column in self.group_cols[gc_include]]
-            for gc_exclude in group_cols_exclude:
-                for column in self.group_cols[gc_exclude]:
-                    try:
-                        cols_out.remove(column)
-                    except KeyError:
-                        continue
+            for column in self.group_cols[gc_include]:
+                if column not in cols_out and column not in cols_exclude:
+                    cols_out.append(column)
         return cols_out
 
     def is_cols_subset(
@@ -420,11 +421,11 @@ class DFColValidator:
         self.obj2 = obj2
 
     def get_cols_on_groups(self, group_cols_include=None, group_cols_exclude=None):
-        cols1 = self.obj1.get_columns_from_groups(
-            group_cols_include, group_cols_exclude
+        cols1 = set(
+            self.obj1.get_columns_from_groups(group_cols_include, group_cols_exclude)
         )
-        cols2 = self.obj2.get_columns_from_groups(
-            group_cols_include, group_cols_exclude
+        cols2 = set(
+            self.obj2.get_columns_from_groups(group_cols_include, group_cols_exclude)
         )
         return cols1, cols2
 
@@ -435,7 +436,9 @@ class DFColValidator:
         return operator(cols1, cols2)
 
     # this looks like something can be done to simplify methods
-    def get_intersection_groups(self, group_cols_include=None, group_cols_exclude=None):
+    def get_intersection_groups(
+        self, group_cols_include=None, group_cols_exclude=None
+    ) -> Set:
         return self._compare_groups(
             set.intersection,
             group_cols_include=group_cols_include,

@@ -1,6 +1,5 @@
 "main module with helpers"
-from functools import reduce, wraps
-import re
+from functools import reduce
 from operator import add
 from collections import namedtuple
 from typing import List
@@ -343,6 +342,7 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
             dict_cols_with_errors - dict with aggregated errors by non-pk columns
                 All numeric columns in DFs get rounded with scale specified in
                     SCALE_OF_NUMBER_IN_COMPARING
+            dfs_extracols - dict with extra columns in 2 dfs. Keys: 'df1', 'df2'. Values are set.
             df_with_errors - df with errors.
                 Added attributes:
                     is_joined_main - 1 if this PK in main DF, NULL otherwise
@@ -378,12 +378,13 @@ class DFExtender(pyspark.sql.dataframe.DataFrame):
         df_c2 = DFColCleaner(self._df_ref, pk=self._pk)
         compare_cols = DFColValidator(df_c1, df_c2)
 
-        true_common_cols = compare_cols.get_intersection_groups(["all"])
-        self._common_cols = compare_cols.get_intersection_groups(["all"], ["pk"])
-        df1_cols = df_c1.get_columns_from_groups(["all"])
-        df2_cols = df_c2.get_columns_from_groups(["all"])
+        true_common_cols = set(compare_cols.get_intersection_groups(["all"]))
+        self._common_cols = set(compare_cols.get_intersection_groups(["all"], ["pk"]))
+        df1_cols = set(df_c1.get_columns_from_groups(["all"]))
+        df2_cols = set(df_c2.get_columns_from_groups(["all"]))
         self._df1_extracols = df1_cols - true_common_cols
         self._df2_extracols = df2_cols - true_common_cols
+        self.dfs_extracols = {"df1": self._df1_extracols, "df2": self._df2_extracols}
 
         self._diff_postfix, self._sum_postfix = "_is_diff", "_sum_error"
         self._columns_diff_postfix = [
@@ -804,7 +805,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             pk (List[str]): Primary Key. Defaults to empty list.
             non_pk (List[str]): Non key attributes, for which changes should be tracked
             time_col (str): Attribute which will be used for sorting and generating row_actual_from
-            change_tech_col_names (dict, optional): _description_.
+            change_tech_col_names (list, optional): _description_.
                 format [row_hash, row_actual_from, row_actual_to]
                 Defaults to None.
             BOW (str, optional): BeginningOfWorld. Defaults to "1000-01-01".
@@ -823,10 +824,9 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         super().__init__(
             df._jdf, df.sql_ctx  # change sql_ctx to sparkSession in spark>=3.4
         )  # magic to integrate pyspark DF into this class
-
-        # TODO: make every column lower
         self._df = df
-        self._pk = pk or []  # if None then empty list
+
+        self._pk = pk or []
         self._non_pk = non_pk or []
         self._time_col = time_col
 
@@ -834,26 +834,31 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         self._EOW = EOW
 
         self._inc_any_version = W.partitionBy(*self._pk).orderBy("row_actual_from")
-        # make it namedtuple or list
-        self.tech_col_names = {  # for quick change if needed
-            "row_hash": "row_hash",
-            "row_actual_from": "row_actual_from",
-            "row_actual_to": "row_actual_to",
-        }
+
         # 1. rename provided columns to standard named
         # 2. when returned - renamed it back to provided names
-        if change_tech_col_names:
-            self.tech_col_names.update(change_tech_col_names)
-
-        if "row_hash" not in self._df.columns:
-            self._df = self._df.withColumn("row_hash", F.lit(None).cast("string"))
-
-        self._extra_attributes = (
-            set(self._df.columns)
-            - set(self._pk)
-            - set(self._non_pk)
-            - set(self.tech_col_names.values())
+        self.tech_cols_default_names = ["row_hash", "row_actual_from", "row_actual_to"]
+        self._df_cols_cl = DFColCleaner(
+            df, pk=pk, non_pk=non_pk, tech_cols=change_tech_col_names or []
         )
+        self._all_attrs_ordered = self._df_cols_cl.get_columns_from_groups(["all"])
+        self._extra_attributes = self._df_cols_cl.get_columns_from_groups(["extra"])
+
+        # if not provided, rename to itself (no extra cost I suppose)
+        if not change_tech_col_names:
+            change_tech_col_names = self.tech_cols_default_names
+
+        dict_rename_tech_cols = {
+            old: new
+            for old, new in zip(change_tech_col_names, self.tech_cols_default_names)
+        }
+        self._dict_rename_tech_cols_backwards = {
+            new: old for old, new in dict_rename_tech_cols.items()
+        }
+        if "row_hash" not in self._all_attrs_ordered:
+            self._df = self._df.withColumn("row_hash", F.lit(None).cast("string"))
+            change_tech_col_names[0] = "row_hash"
+        self._df = DFColCleaner.rename_to(self._df, dict_rename_tech_cols)
 
     def df_to_scd2(self):
         """
@@ -865,7 +870,15 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         if not self._time_col:
             raise HhopException("time_col is a required parameter")
 
-        df_cols = self._df.columns
+        df_cols_no_tech = self._df_cols_cl.get_columns_from_groups(
+            ["all"], ["tech_cols"]
+        )
+        all_attrs_ordered = [
+            *df_cols_no_tech,
+            "row_hash",
+            col("row_actual_from").cast("string"),
+            col("row_actual_to").cast("string"),
+        ]
 
         window_pk_asc = W.partitionBy(*self._pk).orderBy(self._time_col)
         df_hash = (
@@ -893,24 +906,17 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             order_by_cols=[F.desc(self._time_col)],  # last value for every day
         )
 
-        window_row_actual_to = W.partitionBy(*self._pk).orderBy("row_actual_from")
-
-        alias_tech_col_names = lambda x: col(x).alias(
-            self.tech_col_names[x]
-        )  # TODO: remove it
-
         df_result = df_ded_by_date.withColumn(
             "row_actual_to",
             F.coalesce(
-                F.date_sub(F.lead("row_actual_from").over(window_row_actual_to), 1),
+                F.date_sub(F.lead("row_actual_from").over(self._inc_any_version), 1),
                 F.lit(self._EOW),
             ),
-        ).select(
-            *df_cols,
-            # "row_hash",  # TODO: think how to handle this
-            alias_tech_col_names("row_actual_from").cast("string"),
-            alias_tech_col_names("row_actual_to").cast("string"),
-        )
+        ).select(*all_attrs_ordered)
+
+        df_result = DFColCleaner.rename_to(
+            df_result, self._dict_rename_tech_cols_backwards
+        ).select(*all_attrs_ordered)
 
         return SCD2Helper(
             df_result, **self._passed_args
@@ -924,16 +930,17 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             cols = [*self._pk, *self._non_pk]
         return F.md5(F.concat_ws("", *sorted(cols)))  # sorting for consistent hash
 
-    def true_version_num(self):
-        inc_any_version = W.partitionBy(*self._pk).orderBy("row_actual_from")
-        df_version_num = (
-            self._df.withColumn(
+    def _df_with_true_version_num(self, df):
+        df_with_true_versions = (
+            df.withColumn(
                 "row_hash", self.hash_cols()
             )  # hash of pk and essential non pk attributes
-            .withColumn("previous_to", F.lag("row_actual_to").over(inc_any_version))
+            .withColumn(
+                "previous_to", F.lag("row_actual_to").over(self._inc_any_version)
+            )
             .withColumn(
                 "diff_with_previous_hash",
-                F.lag("row_hash").over(inc_any_version) != col("row_hash"),
+                F.lag("row_hash").over(self._inc_any_version) != col("row_hash"),
             )
             .withColumn(
                 "version_num",  # true version num
@@ -945,10 +952,10 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
                         ),  # any hole in history also creates new version
                         F.lit(1),
                     )
-                ).over(inc_any_version),
+                ).over(self._inc_any_version),
             )
         )
-        return df_version_num
+        return df_with_true_versions
 
     def validate_scd2(self) -> namedtuple:
         """Validation of a SCD2 table
@@ -1021,33 +1028,19 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
 
         # check if there are new versions with the same hash (extra version in this case is harmless but wrong)
 
-        if self._time_col:
-            window_pk_asc = W.partitionBy(*self._pk).orderBy(self._time_col)
-            df_hash_version = self._df.withColumn(
-                "row_hash", self.hash_cols(*self._pk, *self._non_pk)
-            ).withColumn(
-                "version_num",
-                F.count(
-                    F.when(
-                        F.lag("row_hash").over(window_pk_asc) != col("row_hash"), 1
-                    )  # should a hole in history create different versions?
-                ).over(window_pk_asc),
-            )
-            pk_check_version = [*self._pk, "version_num"]
-            self.pk_by_version = DFExtender(
-                df_hash_version, pk=pk_check_version, silent_mode=True
-            )
-            self.pk_by_version.get_info(pk_stats=True, null_stats=False)
-            cnt_duplicates_version = self.pk_by_version.pk_stats[2]
+        df_hash_version = self._df_with_true_version_num(self._df)
+        pk_check_version = [*self._pk, "version_num"]
+        self.pk_by_version = DFExtender(
+            df_hash_version, pk=pk_check_version, silent_mode=True
+        )
+        self.pk_by_version.get_info(pk_stats=True, null_stats=False)
+        cnt_duplicates_version = self.pk_by_version.pk_stats[2]
 
-            if cnt_duplicates_version != 0:
-                print(
-                    f"There are {cnt_duplicates_version} PK duplicates by {pk_check_version} "
-                    "Look at `.pk_by_versions.df_duplicates_pk`"
-                )
-        else:  # do we really need time_col anyway?
-            print("time_col is not provided, checking duplicated versions is skipped")
-            cnt_duplicates_version = 1
+        if cnt_duplicates_version != 0:
+            print(
+                f"There are {cnt_duplicates_version} PK duplicates by {pk_check_version} "
+                "Look at `.pk_by_versions.df_duplicates_pk`"
+            )
 
         print(f"Number of records: {self.basic_pk_check.pk_stats[0]:,}")
 
@@ -1070,8 +1063,24 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Returns:
             DataFrame: DataFrame with full history from BOW to EOW
         """
-        null_attrs = [
-            F.lit(None).alias(x) for x in (*self._non_pk, *self._extra_attributes)
+        self._df_cols_cl.group_cols["tech_cols"] = self.tech_cols_default_names
+        null_attrs = self._df_cols_cl.get_columns_from_groups(
+            ["non_pk", "extra"], ["tech_cols"]
+        )
+        null_attrs_create_null = [F.lit(None).alias(x) for x in null_attrs]
+        all_attrs_ordered_create_null = [
+            *self._pk,
+            *null_attrs_create_null,
+            self.hash_cols().alias("row_hash"),
+            "row_actual_from",
+            "row_actual_to",
+        ]
+        all_attrs_ordered = [
+            *self._pk,
+            *null_attrs,
+            self.hash_cols().alias("row_hash"),
+            "row_actual_from",
+            "row_actual_to",
         ]
         window_inc_versions = W.partitionBy(*self._pk).orderBy("row_actual_from")
         df_holes = (
@@ -1114,63 +1123,47 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumn("splitted_from_to", F.split("from_to_str", ","))
             .withColumn("row_actual_from", col("splitted_from_to").getItem(0))
             .withColumn("row_actual_to", col("splitted_from_to").getItem(1))
-            .select(
-                *self._pk,
-                *null_attrs,
-                self.hash_cols().alias("row_hash"),
-                "row_actual_from",
-                "row_actual_to",
-            )
+            .select(*all_attrs_ordered_create_null)
         )
 
         df_filled = self._df.unionByName(df_holes)
 
-        return SCD2Helper(df_filled, **self._passed_args)
+        df_result = DFColCleaner.rename_to(
+            df_filled, self._dict_rename_tech_cols_backwards
+        ).select(*all_attrs_ordered)
+
+        return SCD2Helper(df_result, **self._passed_args)
 
     def merge_scd2_history(self) -> DataFrame:
-        """TODO: MAKE IT BETTER, common parts move to a class
+        """
         If there are holes in history, this method is going to extrapolate versions falsely
         If it is the case, set a flag fill_history=True
         Returns:
             DataFrame: DF with merged SCD2 history
         """
-        inc_any_version = W.partitionBy(*self._pk).orderBy("row_actual_from")
-        inc_true_version = W.partitionBy(*self._pk, "version_num").orderBy(
-            "row_actual_from"
+        self._df_cols_cl.group_cols["tech_cols"] = self.tech_cols_default_names
+        df_cols_no_tech = self._df_cols_cl.get_columns_from_groups(
+            ["all"], ["tech_cols"]
         )
-        df_cols = self._df.columns
-        df_hash = (
-            self._df.withColumn(
-                "row_hash", self.hash_cols()
-            )  # hash of pk and essential non pk attributes
-            .withColumn("previous_to", F.lag("row_actual_to").over(inc_any_version))
-            .withColumn(
-                "diff_with_previous_hash",
-                F.lag("row_hash").over(inc_any_version) != col("row_hash"),
-            )
-            .withColumn(
-                "version_num",  # true version num
-                F.count(
-                    F.when(
-                        col("diff_with_previous_hash")
-                        | (
-                            col("row_actual_from") != F.date_add(col("previous_to"), 1)
-                        ),  # any hole in history also creates new version
-                        F.lit(1),
-                    )
-                ).over(inc_any_version),
-            )
-            .withColumn(
+        all_attrs_ordered = [
+            *df_cols_no_tech,
+            "row_hash",
+            col("row_actual_from").cast("string"),
+            col("row_actual_to").cast("string"),
+        ]
+        df_with_true_versions = self._df_with_true_version_num(self._df)
+        df_max_2_vers_per_true_version = (
+            df_with_true_versions.withColumn(
                 "version_num_behind",
                 F.coalesce(
-                    F.lag("version_num").over(inc_any_version),
+                    F.lag("version_num").over(self._inc_any_version),
                     col("version_num") - 1,
                 ),
             )
             .withColumn(
                 "version_num_infront",
                 F.coalesce(
-                    F.lead("version_num").over(inc_any_version),
+                    F.lead("version_num").over(self._inc_any_version),
                     col("version_num") + 1,
                 ),
             )
@@ -1184,27 +1177,26 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumn(
                 "row_actual_to",  # if there is second version, we get row_actual_to from it
                 F.coalesce(
-                    F.lead("row_actual_to").over(inc_true_version), col("row_actual_to")
+                    F.lead("row_actual_to").over(self._inc_any_version),
+                    col("row_actual_to"),
                 ),
             )
         )
 
         df_ded_by_version = deduplicate_df(
-            df_hash,
+            df_max_2_vers_per_true_version,
             pk=[*self._pk, "version_num"],
             order_by_cols=[
                 "row_actual_from"
             ],  # first row with same hash with respect to version numbers
         )
-        alias_tech_col_names = lambda x: col(x).alias(self.tech_col_names[x])
-        df_merged_history = df_ded_by_version.select(
-            *df_cols,
-            # alias_tech_col_names("row_hash"),
-            # alias_tech_col_names("row_actual_from").cast("string"),
-            # alias_tech_col_names("row_actual_to").cast("string"),
-        )
+        df_merged_history = df_ded_by_version.select(all_attrs_ordered)
 
-        return SCD2Helper(df_merged_history, **self._passed_args)
+        df_result = DFColCleaner.rename_to(
+            df_merged_history, self._dict_rename_tech_cols_backwards
+        ).select(*all_attrs_ordered)
+
+        return SCD2Helper(df_result, **self._passed_args)
 
     def merge_scd2_update(
         self, df_new: DataFrame, is_deduplicate_df=True
