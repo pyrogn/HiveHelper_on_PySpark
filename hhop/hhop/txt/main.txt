@@ -1260,7 +1260,19 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             rewrite=True,
             verbose=True,
         )
-
+        # DRY
+        tech_cols_suffix_1 = {f"{i}_{1}" for i in self._tech_cols_default_names}
+        tech_cols_suffix_2 = {f"{i}_{2}" for i in self._tech_cols_default_names}
+        cols_suffix_1 = [
+            i
+            for i in DFColCleaner.get_columns_with_suffix(df_merged, "_1")
+            if i not in tech_cols_suffix_1
+        ]
+        cols_suffix_2 = [
+            i
+            for i in DFColCleaner.get_columns_with_suffix(df_merged, "_2")
+            if i not in tech_cols_suffix_2
+        ]
         df_close = (
             df_merged.filter(col("operation_type") == "close")
             .withColumnRenamed("row_actual_from_1", "row_actual_from")
@@ -1268,9 +1280,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumnRenamed("row_hash_1", "row_hash")
             .select(
                 *self._pk,
-                *DFColCleaner.get_columns_with_suffix(
-                    df_merged, "_1"
-                ),  # TODO: need to exclude tech cols and rename back
+                *cols_suffix_1,  # TODO: need to exclude tech cols and rename back
                 *self._tech_cols_default_names,
             )
         )
@@ -1316,14 +1326,15 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumnRenamed("row_hash_2", "row_hash")
             .select(
                 *self._pk,
-                *DFColCleaner.get_columns_with_suffix(df_merged, "_2"),
+                *cols_suffix_2,
                 *self._tech_cols_default_names,
             )
         )
+        # DFColCleaner.mass_rename(df_insert, '_2', False,)
 
         df_merged_update = union_all(
             df_history, df_nochange, df_close, df_update_close, df_update_new, df_insert
-        )
+        ).select(cols1.get_columns_from_groups(["all"]))
 
         # return df_result
         return SCD2Helper(df_merged_update, **self._passed_args)

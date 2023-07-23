@@ -175,10 +175,10 @@ def write_table(
                     drop_table(schema_table)
                 else:
                     raise DiffColsException(
-                        "columns with existing DF are different"
-                        " and force rewrite flag is set to False"
-                        f" {current_cols.get_columns_from_groups['all']}"
-                        f" {existing_cols.get_columns_from_groups['all']}"
+                        "columns with existing DF and new DF are different"
+                        " and force rewrite flag on diff DDL is set to False"
+                        f" {current_cols.get_columns_from_groups(['all'])}"
+                        f" {existing_cols.get_columns_from_groups(['all'])}"
                     )
             else:
                 df = df.select(*existing_df.columns)
@@ -295,19 +295,20 @@ def safely_write_table():
 
 
 class DFColCleaner:
-    """WIP
+    """
     Helps with comparing and raising exceptions on columns of DFs
+    I still do not like design of this class, it could be better
     """
 
     def __init__(self, df, **group_cols: List[str]):
-        """_summary_
+        """Provide DF and groups of columns
 
         Args:
-            df (_type_): _description_
+            df (DataFrame): DataFrame
             **group_cols (List[str]): groups with lists of columns
 
         Raises:
-            HhopException: _description_
+            DiffColsException: Raised there is an error in columns
         """
         self.df = df
         group_cols = {key: value or [] for key, value in group_cols.items()}
@@ -352,7 +353,7 @@ class DFColCleaner:
         self.group_cols = group_cols_clean
 
     @staticmethod
-    def lower_list(cols, type_error="columns"):
+    def lower_list(cols: List, type_error="columns") -> List:
         lower_list = [str.lower(elem) for elem in cols]
 
         seen = set()
@@ -364,6 +365,7 @@ class DFColCleaner:
 
     @classmethod
     def get_columns_with_suffix(cls, df, suffix):
+        "selects columns with suffix on DF"
         df_cols = cls.lower_list(df.columns)
         cols_with_suffix = []
         for column in df_cols:
@@ -386,6 +388,7 @@ class DFColCleaner:
             dict_rename[column] = new_colname(column)
 
         df = self.rename_to(self.df, dict_rename)
+        # TODO: change self.group_cols accordingly
         return df
 
     @staticmethod
