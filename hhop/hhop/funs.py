@@ -10,13 +10,15 @@ from pyspark.sql import DataFrame
 from pyspark.sql.functions import col
 import pyspark.sql.functions as F
 from pyspark.sql.window import Window as W
+from pyspark.sql.utils import AnalysisException
 
-from .exceptions import HhopException
+from .exceptions import HhopException, DiffColsException
 from .spark_init import get_spark_builder
 
 spark = lambda: get_spark_builder().getOrCreate()
 
 DEFAULT_SCHEMA_WRITE = "default"
+DROP_TABLE_ON_WRITE_IF_DIFF_DDL = True
 
 
 def read_table(
@@ -145,7 +147,8 @@ def write_table(
         table (str): Name of the table (without schema)
         schema (str, optional): Name of the schema. Defaults to DEFAULT_SCHEMA_WRITE in this file.
         mode (str, optional): Mode to write (overwrite or append). Defaults to "overwrite".
-        rewrite (bool, optional): If True the existing table will be dropped from Hive and HDFS
+        rewrite (bool, optional): If True the existing table will be dropped from Hive and HDFS.
+            No exceptions are raised if it doesn't exist
         format_files (str, optional): Format of files in HDFS. Only applied on creation of the table.
             Defaults to "parquet".
         partition_cols (Collection, optional): Partitioned columns of the table. Defaults to [].
@@ -154,27 +157,35 @@ def write_table(
     Raises:
         HhopException: raised if partition columns are not in the DF
     """
-    partition_cols = partition_cols or []
-
     schema_table = f"{schema}.{table}"
+    partition_cols = partition_cols or []
+    current_cols = DFColCleaner(df, partition_cols=partition_cols)
 
+    create_table = True
     if rewrite:
         drop_table(schema_table)
-        location_if_exists = None
-    else:
-        location_if_exists = get_table_location(schema_table)
 
-    # raise an exception if partition_cols do not exist in DF
-    _ = DFColCleaner(df, partition_cols=partition_cols)
-
-    try:  # select exact columns as existing table
-        cols_existing_table = read_table(schema_table).columns
-        df = df.select(
-            *cols_existing_table
-        )  # TODO: decide what to do if columns don't match: drop table, raise error,
-        # add a contant to the config of module?
-    except Exception as e:  # put partition cols at the end
-        # print(e)
+    try:  # is table already exists
+        existing_df = read_table(schema_table)
+        try:  # is existing table has the same columns
+            existing_cols = DFColCleaner(existing_df)
+            comp_cols = DFColValidator(current_cols, existing_cols)
+            if not comp_cols.is_equal_cols_groups(["all"]):
+                if DROP_TABLE_ON_WRITE_IF_DIFF_DDL:
+                    drop_table(schema_table)
+                else:
+                    raise DiffColsException(
+                        "columns with existing DF are different"
+                        " and force rewrite flag is set to False"
+                        f" {current_cols.get_columns_from_groups['all']}"
+                        f" {existing_cols.get_columns_from_groups['all']}"
+                    )
+            else:
+                df = df.select(*existing_df.columns)
+                create_table = False
+        except DiffColsException:
+            raise
+    except AnalysisException:
         df_cols_part_at_end = [
             column for column in df.columns if column not in partition_cols
         ] + partition_cols
@@ -182,10 +193,7 @@ def write_table(
 
     df_save = df.write
 
-    if location_if_exists:
-        # it allows to rewrite files if location of to-be-written table is not empty
-        df_save = df_save.option("path", location_if_exists)
-    else:
+    if create_table:
         derived_schema = df.schema
         empty_df = spark().createDataFrame([], derived_schema)  # create empty table
         empty_df_save = empty_df.write.format(format_files)
@@ -200,15 +208,19 @@ def write_table(
 
 
 def drop_table(
-    table_name, drop_hdfs: bool = True, if_exists: bool = True, verbose: bool = False
+    table_name: str,
+    drop_hdfs: bool = True,
+    if_exists: bool = True,
+    verbose: bool = False,
 ):
     """This function drops a Hive table and cleans up hdfs folder if it exists
 
     Args:
-        table_name (_type_): _description_
-        drop_hdfs (bool, optional): _description_. Defaults to True.
-        if_exists (bool, optional): _description_. Defaults to True.
-        verbose (bool, optional): _description_. Defaults to False.
+        table_name (str, required): name of Hive table÷÷÷
+        drop_hdfs (bool, optional): To find and drop hdfs files. Defaults to True.
+        if_exists (bool, optional): If false it will raise an Exception if table doesn't exists.
+            Defaults to True.
+        verbose (bool, optional): Enable to print logs. Defaults to False.
     """
 
     if drop_hdfs:
@@ -232,7 +244,7 @@ def drop_table(
 
 def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):
     """Function to deduplicate DF using row_number function so DF will have provided pk as Primary Key
-    Attrs:
+    Agrs:
         df: Spark DF
         pk: list of desired PK columns. Example: ['pk1', 'pk2']
         order_by_cols: list of columns to do order_by. You may use strings, but default order is ascending
@@ -316,7 +328,7 @@ class DFColCleaner:
                 columns_in_group.append(column)
             group_cols_clean[group] = self.lower_list(columns_in_group)
         if not_in_all_columns:
-            raise HhopException(
+            raise DiffColsException(
                 f"Columns {not_in_all_columns} not in the DF: {df_columns}"
             )
 
@@ -346,7 +358,7 @@ class DFColCleaner:
         seen = set()
         dupes = [x for x in lower_list if x in seen or seen.add(x)]
         if dupes:
-            raise HhopException(f"Found duplicates {type_error}: {dupes}")
+            raise DiffColsException(f"Found duplicates {type_error}: {dupes}")
 
         return lower_list
 
@@ -377,9 +389,12 @@ class DFColCleaner:
         return df
 
     @staticmethod
-    def rename_to(df, old_new_mapping: dict):
+    def rename_to(df, old_new_mapping: dict, backwards=False):
+        if backwards:
+            old_new_mapping = {v: k for k, v in old_new_mapping.items()}
         for old, new in old_new_mapping.items():
-            df = df.withColumnRenamed(old, new)
+            if old != new:
+                df = df.withColumnRenamed(old, new)
         return df
 
     def get_columns_from_groups(
@@ -464,7 +479,7 @@ class DFColValidator:
     ):
         is_equal = len(self.get_xor_groups(group_cols_include, group_cols_exclude)) == 0
         if raise_exception and not is_equal:
-            raise HhopException(
+            raise DiffColsException(
                 f"Groups in 2 DF are not equal. Groups: {group_cols_include} minus {group_cols_exclude}"
                 "Use methods get_TYPE_groups or get_cols_on_groups"
             )

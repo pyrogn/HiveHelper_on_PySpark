@@ -794,7 +794,6 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         pk: List[str] = None,
         non_pk: List[str] = None,
         time_col: str = None,
-        change_tech_col_names: list = None,
         BOW: str = "1000-01-01",
         EOW: str = "9999-12-31",
     ) -> "SCD2Helper":
@@ -803,13 +802,12 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Args:
             df (DataFrame): _description_
             pk (List[str]): Primary Key. Defaults to empty list.
-            non_pk (List[str]): Non key attributes, for which changes should be tracked
+            non_pk (List[str]): Non key attributes, for which changes should be created
             time_col (str): Attribute which will be used for sorting and generating row_actual_from
-            change_tech_col_names (list, optional): _description_.
-                format [row_hash, row_actual_from, row_actual_to]
-                Defaults to None.
             BOW (str, optional): BeginningOfWorld. Defaults to "1000-01-01".
             EOW (str, optional): EndOfWorld. Defaults to "9999-12-31".
+
+        Correct format of tech columns: row_actual_from, row_actual_to
         """
         # add df, pk, non_pk_cols(which can be calculated)
         # change_tech_col_names is the last thing, fix df yourself!
@@ -834,31 +832,24 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         self._EOW = EOW
 
         self._inc_any_version = W.partitionBy(*self._pk).orderBy("row_actual_from")
-
-        # 1. rename provided columns to standard named
-        # 2. when returned - renamed it back to provided names
-        self.tech_cols_default_names = ["row_hash", "row_actual_from", "row_actual_to"]
-        self._df_cols_cl = DFColCleaner(
-            df, pk=pk, non_pk=non_pk, tech_cols=change_tech_col_names or []
+        self._inc_true_version = W.partitionBy(*self._pk, "version_num").orderBy(
+            "row_actual_from"
         )
+
+        self._tech_cols_default_names = ["row_hash", "row_actual_from", "row_actual_to"]
+        # create all tech cols
+        self._df = self._df.withColumn("row_hash", self.hash_cols())
+        all_cols = DFColCleaner(self._df).get_columns_from_groups(["all"])
+        for column in self._tech_cols_default_names[1:]:
+            if column not in all_cols:
+                self._df = self._df.withColumn(column, F.lit(None))
+
+        self._df_cols_cl = DFColCleaner(
+            self._df, pk=pk, non_pk=non_pk, tech_cols=self._tech_cols_default_names
+        )
+
         self._all_attrs_ordered = self._df_cols_cl.get_columns_from_groups(["all"])
         self._extra_attributes = self._df_cols_cl.get_columns_from_groups(["extra"])
-
-        # if not provided, rename to itself (no extra cost I suppose)
-        if not change_tech_col_names:
-            change_tech_col_names = self.tech_cols_default_names
-
-        dict_rename_tech_cols = {
-            old: new
-            for old, new in zip(change_tech_col_names, self.tech_cols_default_names)
-        }
-        self._dict_rename_tech_cols_backwards = {
-            new: old for old, new in dict_rename_tech_cols.items()
-        }
-        if "row_hash" not in self._all_attrs_ordered:
-            self._df = self._df.withColumn("row_hash", F.lit(None).cast("string"))
-            change_tech_col_names[0] = "row_hash"
-        self._df = DFColCleaner.rename_to(self._df, dict_rename_tech_cols)
 
     def df_to_scd2(self):
         """
@@ -912,10 +903,6 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
                 F.date_sub(F.lead("row_actual_from").over(self._inc_any_version), 1),
                 F.lit(self._EOW),
             ),
-        ).select(*all_attrs_ordered)
-
-        df_result = DFColCleaner.rename_to(
-            df_result, self._dict_rename_tech_cols_backwards
         ).select(*all_attrs_ordered)
 
         return SCD2Helper(
@@ -1039,7 +1026,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         if cnt_duplicates_version != 0:
             print(
                 f"There are {cnt_duplicates_version} PK duplicates by {pk_check_version} "
-                "Look at `.pk_by_versions.df_duplicates_pk`"
+                "Look at `.pk_by_version.df_duplicates_pk`"
             )
 
         print(f"Number of records: {self.basic_pk_check.pk_stats[0]:,}")
@@ -1063,25 +1050,19 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Returns:
             DataFrame: DataFrame with full history from BOW to EOW
         """
-        self._df_cols_cl.group_cols["tech_cols"] = self.tech_cols_default_names
+
         null_attrs = self._df_cols_cl.get_columns_from_groups(
             ["non_pk", "extra"], ["tech_cols"]
         )
         null_attrs_create_null = [F.lit(None).alias(x) for x in null_attrs]
-        all_attrs_ordered_create_null = [
+        cols_null_holes = lambda x: [
             *self._pk,
-            *null_attrs_create_null,
-            self.hash_cols().alias("row_hash"),
-            "row_actual_from",
-            "row_actual_to",
+            *x,
+            *self._df_cols_cl.get_columns_from_groups(["tech_cols"]),
         ]
-        all_attrs_ordered = [
-            *self._pk,
-            *null_attrs,
-            self.hash_cols().alias("row_hash"),
-            "row_actual_from",
-            "row_actual_to",
-        ]
+        all_attrs_ordered_create_null = cols_null_holes(null_attrs_create_null)
+        all_attrs_ordered = cols_null_holes(null_attrs)
+
         window_inc_versions = W.partitionBy(*self._pk).orderBy("row_actual_from")
         df_holes = (
             self._df.withColumn(
@@ -1126,11 +1107,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .select(*all_attrs_ordered_create_null)
         )
 
-        df_filled = self._df.unionByName(df_holes)
-
-        df_result = DFColCleaner.rename_to(
-            df_filled, self._dict_rename_tech_cols_backwards
-        ).select(*all_attrs_ordered)
+        df_result = self._df.unionByName(df_holes).select(*all_attrs_ordered)
 
         return SCD2Helper(df_result, **self._passed_args)
 
@@ -1141,7 +1118,6 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Returns:
             DataFrame: DF with merged SCD2 history
         """
-        self._df_cols_cl.group_cols["tech_cols"] = self.tech_cols_default_names
         df_cols_no_tech = self._df_cols_cl.get_columns_from_groups(
             ["all"], ["tech_cols"]
         )
@@ -1177,7 +1153,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumn(
                 "row_actual_to",  # if there is second version, we get row_actual_to from it
                 F.coalesce(
-                    F.lead("row_actual_to").over(self._inc_any_version),
+                    F.lead("row_actual_to").over(self._inc_true_version),
                     col("row_actual_to"),
                 ),
             )
@@ -1190,11 +1166,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
                 "row_actual_from"
             ],  # first row with same hash with respect to version numbers
         )
-        df_merged_history = df_ded_by_version.select(all_attrs_ordered)
-
-        df_result = DFColCleaner.rename_to(
-            df_merged_history, self._dict_rename_tech_cols_backwards
-        ).select(*all_attrs_ordered)
+        df_result = df_ded_by_version.select(*all_attrs_ordered)
 
         return SCD2Helper(df_result, **self._passed_args)
 
@@ -1211,78 +1183,142 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             SCD2Helper: _description_
         """
         # TODO: raise error when cols are different or different PK
-        # or there are no row_actual_from, row_actual_to
-        common_cols = self._df.columns
-        # df1_cols = set(self._df.columns)
-        # df2_cols = set(self._df_ref.columns)
-        # self._common_cols = (df1_cols & df2_cols) - set(self._pk)
-        # self._df1_extracols = df1_cols - self._common_cols - set(self._pk)
-        # self._df2_extracols = df2_cols - self._common_cols - set(self._pk)
 
-        cols_not_pk = set(common_cols) - set(self._pk)
-        tech_cols_final = ["row_hash", "row_actual_from", "row_actual_to"]
-        dict_num_cols = {
-            str(enum): cols
-            for enum, cols in zip([1, 2], cols_not_pk - set(tech_cols_final))
-        }
+        # TODO: add row_hash and clean up this mess
+        # TODO: think what can be second DF. Deduplicated? Does it contain tech_cols?
 
-        def rename_cols(df, num):
-            df_temp = df
-            for column in cols_not_pk:
-                df_temp = df_temp.withColumnRenamed(column, column + str(num))
-            return df_temp
+        # validate that 2 df have the same columns
 
-        df1 = rename_cols(self._df, 1)
-        df2 = rename_cols(df_new._df, 2)
+        # cols_not_pk = set(common_cols) - set(self._pk) - set(["row_hash"])
+        # # tech_cols_final = ["row_hash", "row_actual_from", "row_actual_to"]
+        # tech_cols_final = []
+        # dict_num_cols = {
+        #     str(enum): cols
+        #     for enum, cols in zip([1, 2], cols_not_pk - set(tech_cols_final))
+        # }
 
-        df_history = df1.filter(col("row_actual_to1") != self._EOW)
-        df_actual = df1.filter(col("row_actual_to1") == self._EOW)
+        # def rename_cols(df, num):
+        #     df_temp = df
+        #     for column in cols_not_pk:
+        #         df_temp = df_temp.withColumnRenamed(column, column + str(num))
+        #     return df_temp
 
-        df_merged = df_actual.join(df_new, on=[*self._pk], how="full").withColumn(
+        # self._df.printSchema()
+        if "row_hash" not in df_new.columns:
+            df_new = df_new.withColumn("row_hash", self.hash_cols())
+
+        cols1 = DFColCleaner(
+            self._df,
+            pk=self._pk,
+            non_pk=self._non_pk,
+            tech_cols=self._tech_cols_default_names,
+        )
+        cols2 = DFColCleaner(
+            df_new,
+            pk=self._pk,
+            non_pk=self._non_pk,
+            tech_cols=self._tech_cols_default_names,
+        )
+        df1 = cols1.mass_rename(
+            "_1",
+            is_append_suffix=True,
+            group_cols_include=["all"],
+            group_cols_exclude=["pk"],
+        )
+        df2 = cols2.mass_rename(
+            "_2",
+            is_append_suffix=True,
+            group_cols_include=["all"],
+            group_cols_exclude=["pk"],
+        )
+        # df1.printSchema()
+        # df1.printSchema()
+        # cols1.
+
+        # df1 = DFColCleaner.mass_rename(self._df, 1)
+        # df_new = rename_cols(df_new, 2)
+        # df1.printSchema()
+        # df2 = rename_cols(df_new._df, 2)
+        df_new = df2
+        df_history = df1.filter(col("row_actual_to_1") != self._EOW)
+        df_actual = df1.filter(col("row_actual_to_1") == self._EOW)
+
+        df_merged = df_actual.join(df2, on=[*self._pk], how="full").withColumn(
             "operation_type",
-            F.when(df_actual["row_hash"] == df_new["row_hash"], F.lit("nochange"))
-            .when(df_actual["row_hash"] != df_new["row_hash"], F.lit("update"))
-            .when(df_actual["row_hash"].isNull(), F.lit("insert"))
-            .when(df_new["row_hash"].isNull(), F.lit("close")),
+            F.when(df_actual["row_hash_1"] == df_new["row_hash_2"], F.lit("nochange"))
+            .when(df_actual["row_hash_1"] != df_new["row_hash_2"], F.lit("update"))
+            .when(df_actual["row_hash_1"].isNull(), F.lit("insert"))
+            .when(df_new["row_hash_2"].isNull(), F.lit("close")),
         )
         # writing stg table to save many reads of source table
-        stg_table_name = f"{DEFAULT_SCHEMA_WRITE}.hhop_stg_merged_scd2_{os.getpid()}"
+        stg_table_name = f"hhop_stg_merged_scd2_{os.getpid()}"
         # drop_table is done inside write_table using flag rewrite
         df_merged = write_read_table(
-            df_merged, stg_table_name, rewrite=True, verbose=False
+            df_merged,
+            stg_table_name,
+            schema=DEFAULT_SCHEMA_WRITE,
+            rewrite=True,
+            verbose=True,
         )
 
         df_close = (
             df_merged.filter(col("operation_type") == "close")
-            .withColumnRenamed("row_actual_from1", "row_actual_from")
+            .withColumnRenamed("row_actual_from_1", "row_actual_from")
             .withColumn("row_actual_to", F.date_sub(F.current_date(), 1))
-            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
+            .withColumnRenamed("row_hash_1", "row_hash")
+            .select(
+                *self._pk,
+                *DFColCleaner.get_columns_with_suffix(
+                    df_merged, "_1"
+                ),  # TODO: need to exclude tech cols and rename back
+                *self._tech_cols_default_names,
+            )
         )
 
         df_update = df_merged.filter(
             col("operation_type") == "update"
         )  # two versions on each update
         df_update_close = (
-            df_update.withColumnRenamed("row_actual_from1", "row_actual_from")
-            .withColumn("row_actual_to", F.date_sub(F.current_date()))
-            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
+            df_update.withColumnRenamed("row_actual_from_1", "row_actual_from")
+            .withColumn("row_actual_to", F.date_sub(F.current_date(), 1))
+            .withColumnRenamed("row_hash_1", "row_hash")
+            .select(
+                *self._pk,
+                *DFColCleaner.get_columns_with_suffix(df_merged, "_1"),
+                *self._tech_cols_default_names,
+            )
         )
         df_update_new = (
             df_update.withColumn("row_actual_from", F.current_date())
-            .withColumnRenamed("row_actual_to1", "row_actual_to")
-            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
+            .withColumnRenamed("row_actual_to_1", "row_actual_to")
+            .withColumnRenamed("row_hash_1", "row_hash")
+            .select(
+                *self._pk,
+                *DFColCleaner.get_columns_with_suffix(df_merged, "_1"),
+                *self._tech_cols_default_names,
+            )
         )
         df_nochange = (
             df_merged.filter(col("operation_type") == "nochange")
-            .withColumnRenamed("row_actual_from1", "row_actual_from")
-            .withColumnRenamed("row_actual_to1", "row_actual_to")
-            .select(*self._pk, dict_num_cols["1"], *tech_cols_final)
+            .withColumnRenamed("row_actual_from_1", "row_actual_from")
+            .withColumnRenamed("row_actual_to_1", "row_actual_to")
+            .withColumnRenamed("row_hash_1", "row_hash")
+            .select(
+                *self._pk,
+                *DFColCleaner.get_columns_with_suffix(df_merged, "_1"),
+                *self._tech_cols_default_names,
+            )
         )
         df_insert = (
             df_merged.filter(col("operation_type") == "insert")
-            .withColumnRenamed("row_actual_from1", "row_actual_from")
-            .withColumnRenamed("row_actual_to1", "row_actual_to")
-            .select(*self._pk, dict_num_cols["2"], *tech_cols_final)
+            .withColumnRenamed("row_actual_from_1", "row_actual_from")
+            .withColumnRenamed("row_actual_to_1", "row_actual_to")
+            .withColumnRenamed("row_hash_2", "row_hash")
+            .select(
+                *self._pk,
+                *DFColCleaner.get_columns_with_suffix(df_merged, "_2"),
+                *self._tech_cols_default_names,
+            )
         )
 
         df_merged_update = union_all(
@@ -1302,10 +1338,11 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Returns:
             DataFrame: joined DataFrame with SCD2 history
         """
-        # TODO: check if dataframes have the same key and correct tech cols
         instance1 = self
         instance2 = df2
         df1, df2 = self._df.alias("df1"), df2.alias("df2")
+        comp_cols = DFColValidator(instance1._df_cols_cl, instance2._df_cols_cl)
+        comp_cols.is_equal_cols_groups(["pk"], raise_exception=True)
 
         tech_attr = {"row_actual_from", "row_actual_to", "row_hash"}
 
@@ -1330,9 +1367,13 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             *[
                 F.coalesce(f"df1.{pk_col}", f"df2.{pk_col}").alias(pk_col)
                 for pk_col in self._pk
-            ],
-            *get_non_pk_attrs(instance1),
-            *get_non_pk_attrs(instance2),
+            ],  # PK
+            *instance1._df_cols_cl.get_columns_from_groups(
+                ["all"], ["tech_cols", "pk"]
+            ),  # non_pk+extra in df1
+            *instance2._df_cols_cl.get_columns_from_groups(
+                ["all"], ["tech_cols", "pk"]
+            ),  # non_pk+extra in df2
             greatest_from.alias("row_actual_from"),
             least_to.alias("row_actual_to"),
         )
