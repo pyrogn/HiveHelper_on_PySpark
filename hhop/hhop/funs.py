@@ -70,7 +70,7 @@ def read_table(
     return df
 
 
-def get_table_location(schema_table: str):
+def get_table_location(schema_table: str) -> str:
     """You pass name of a Hive table
     Funtction returns HDFS address of a table if it exists"""
 
@@ -135,7 +135,7 @@ def write_table(
     format_files: str = "parquet",
     partition_cols: List[str] = None,
     verbose: bool = True,
-) -> DataFrame:
+) -> None:
     """
     This function saves a DF to Hive using common default values
 
@@ -213,7 +213,7 @@ def drop_table(
     drop_hdfs: bool = True,
     if_exists: bool = True,
     verbose: bool = False,
-):
+) -> None:
     """This function drops a Hive table and cleans up hdfs folder if it exists
 
     Args:
@@ -243,7 +243,7 @@ def drop_table(
         print(f"sql query: drop table {if_exists_str} {table_name}")
 
 
-def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]):
+def deduplicate_df(df: DataFrame, pk: List[str], order_by_cols: List[col]) -> DataFrame:
     """Function to deduplicate DF using row_number function so DF will have provided pk as Primary Key
     Agrs:
         df: Spark DF
@@ -298,7 +298,7 @@ def safely_write_table():
 class DFColCleaner:
     """
     Helps with comparing and raising exceptions on columns of DFs
-    I still do not like design of this class, it could be better
+    I still do not like design of this class, it could be better and cleaner
     """
 
     def __init__(self, df, **group_cols: List[str]):
@@ -389,7 +389,7 @@ class DFColCleaner:
             dict_rename[column] = new_colname(column)
 
         df = self.rename_to(self.df, dict_rename)
-        # TODO: change self.group_cols accordingly
+        # TODO: change self.group_cols accordingly after rename
         return df
 
     @staticmethod

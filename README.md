@@ -21,10 +21,13 @@ The library is tested on PySpark 3.1, 3.2
 3. Getting info about tables in a schema. Dropping empty tables.
 4. Validating and getting stats on a table.
 5. Simplifying operations like reading, writing Hive tables.
+6. Working with SCD2 tables (creating, merging, joining)
 
 ## Quick links
 
 ### [Full demo script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/jupyter/demo.ipynb)
+
+### [Demo SCD2 script](https://github.com/pyrogn/HiveHelper_on_PySpark/blob/main/jupyter/scd2_demo.ipynb)
 
 ### [Code](https://github.com/pyrogn/HiveHelper_on_PySpark/tree/main/hhop)
 
@@ -210,7 +213,135 @@ table_partitions_got.cast_col_types({'dt_part': 'date'})
 
 ### SCD2Helper (WIP)
 
-SCD2Helper helps to create, validate, update and join SCD2 tables
+SCD2Helper helps to create, validate, update and join SCD2 tables.
+
+```python
+# 1. Create SCD2 table
+df1_transactions_s = SCD2Helper(
+    df1_transactions, 
+    pk=['pk1', 'pk2'], 
+    non_pk=['nonpk1', 'nonpk2', 'nonpk3'],
+    time_col='ts',
+)
+df1_scd2 = df1_transactions_s.df_to_scd2()
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+# |pk1|pk2 |nonpk1|nonpk2|nonpk3|nonpk_extra|ts                 |row_hash                        |row_actual_from|row_actual_to|
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+# |v1 |null|null  |null  |c2    |r3         |2023-05-07 15:00:00|56e6807f4b745e20dffeb1b731e5a6d4|2023-05-07     |2023-05-09   |
+# |v1 |null|null  |null  |null  |null       |2023-05-10 15:00:00|6654c734ccab8f440ff0825eb443dc7f|2023-05-10     |2023-05-10   |
+# |v1 |null|null  |fds   |null  |null       |2023-05-11 15:00:00|2d2722576095dd7996570b307d777539|2023-05-11     |2023-05-11   |
+# |v1 |null|null  |fds   |asdf  |null       |2023-05-12 15:00:00|b08363345cd7c1cb14e6f4747ce1563d|2023-05-12     |9999-12-31   |
+# |v1 |c1  |a1    |b1    |c1    |r1         |2023-05-01 10:00:00|93e6cc4b8b0445cf261e9417106ae6f0|2023-05-01     |2023-05-02   |
+# |v1 |c1  |a1    |b2    |c2    |null       |2023-05-03 15:00:00|a6244d3c7c2aed33c4d9525fbef29c1d|2023-05-03     |2023-05-04   |
+# |v1 |c1  |null  |b2    |c2    |r3         |2023-05-05 15:00:00|17f599be9e07976c2036361c9ad8f633|2023-05-05     |2023-05-06   |
+# |v1 |c1  |null  |null  |c2    |r3         |2023-05-07 15:00:00|a363a9dd6d5b30865ab5813581941516|2023-05-07     |2023-05-09   |
+# |v1 |c1  |null  |null  |null  |null       |2023-05-10 15:00:00|da58ea33b20d82042d9969c46c16c3b8|2023-05-10     |2023-05-12   |
+# |v1 |c1  |null  |null  |c2    |r3         |2023-05-13 15:00:00|a363a9dd6d5b30865ab5813581941516|2023-05-13     |9999-12-31   |
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+
+
+
+# 2. Validate SCD2 table
+df1_scd2_wrong_copy = SCD2Helper(
+    df1_scd2.withColumn('row_actual_to', F.when(col('row_actual_to') == '9999-12-31', F.lit('1000-01-01'))), 
+    pk=['pk1', 'pk2'], 
+    non_pk=['nonpk1', 'nonpk2', 'nonpk3'],
+    time_col='ts',
+)
+res = df1_scd2_wrong_copy.validate_scd2()
+# There are 2 PK duplicates by ['pk1', 'pk2', 'row_actual_to'] Look at `.basic_pk_check.df_duplicates_pk`
+# 10 rows with invalid dates, look at `.df_invalid_dates`
+# Number of records: 10
+# Errors_In_SCD2_table(duplicates_by_pk=2, invalid_dates=10, broken_history=0, duplicates_by_version=0)
+
+
+# 3. Fill history with versions with null values
+df1_scd2_add_more_holes = SCD2Helper(
+    df1_holes_in_history,
+    pk=['pk1', 'pk2'], 
+    non_pk=['nonpk1', 'nonpk2', 'nonpk3'],
+)
+df1_filled_history = df1_scd2_add_more_holes.fill_scd2_history()
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+# |pk1|pk2 |nonpk1|nonpk2|nonpk3|nonpk_extra|ts                 |row_hash                        |row_actual_from|row_actual_to|
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+# |v1 |null|null  |null  |null  |null       |null               |56e6807f4b745e20dffeb1b731e5a6d4|1000-01-01     |2023-05-06   |
+# |v1 |null|null  |null  |c2    |r3         |2023-05-07 15:00:00|56e6807f4b745e20dffeb1b731e5a6d4|2023-05-07     |2023-05-09   |
+# |v1 |null|null  |null  |null  |null       |2023-05-10 15:00:00|6654c734ccab8f440ff0825eb443dc7f|2023-05-10     |2023-05-10   |
+# |v1 |null|null  |fds   |null  |null       |2023-05-11 15:00:00|2d2722576095dd7996570b307d777539|2023-05-11     |2023-05-11   |
+# |v1 |null|null  |fds   |asdf  |null       |2023-05-12 15:00:00|b08363345cd7c1cb14e6f4747ce1563d|2023-05-12     |9999-12-31   |
+# |v1 |c1  |null  |null  |null  |null       |null               |93e6cc4b8b0445cf261e9417106ae6f0|1000-01-01     |2023-04-30   |
+# |v1 |c1  |a1    |b1    |c1    |r1         |2023-05-01 10:00:00|93e6cc4b8b0445cf261e9417106ae6f0|2023-05-01     |2023-05-02   |
+# |v1 |c1  |null  |null  |null  |null       |null               |17f599be9e07976c2036361c9ad8f633|2023-05-03     |2023-05-04   |
+# |v1 |c1  |null  |b2    |c2    |r3         |2023-05-05 15:00:00|17f599be9e07976c2036361c9ad8f633|2023-05-05     |2023-05-06   |
+# |v1 |c1  |null  |null  |null  |null       |null               |da58ea33b20d82042d9969c46c16c3b8|2023-05-07     |2023-05-09   |
+# |v1 |c1  |null  |null  |null  |null       |2023-05-10 15:00:00|da58ea33b20d82042d9969c46c16c3b8|2023-05-10     |2023-05-12   |
+# |v1 |c1  |null  |null  |null  |null       |null               |da58ea33b20d82042d9969c46c16c3b8|2023-05-13     |9999-12-31   |
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+
+# 4. Merge versions with same hash so only TRUE versions are left
+df1_scd2_fewer_non_pk = SCD2Helper(
+    df1_scd2,
+    pk=['pk1', 'pk2'], 
+    non_pk=['nonpk2'],
+)
+df1_merged_history = df1_scd2_fewer_non_pk.merge_scd2_history().cache()
+df1_scd2.orderBy('pk1', 'pk2', 'row_actual_from').show(10, False)
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+# |pk1|pk2 |nonpk1|nonpk2|nonpk3|nonpk_extra|ts                 |row_hash                        |row_actual_from|row_actual_to|
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+# |v1 |null|null  |null  |c2    |r3         |2023-05-07 15:00:00|56e6807f4b745e20dffeb1b731e5a6d4|2023-05-07     |2023-05-09   |
+# |v1 |null|null  |null  |null  |null       |2023-05-10 15:00:00|6654c734ccab8f440ff0825eb443dc7f|2023-05-10     |2023-05-10   |
+# |v1 |null|null  |fds   |null  |null       |2023-05-11 15:00:00|2d2722576095dd7996570b307d777539|2023-05-11     |2023-05-11   |
+# |v1 |null|null  |fds   |asdf  |null       |2023-05-12 15:00:00|b08363345cd7c1cb14e6f4747ce1563d|2023-05-12     |9999-12-31   |
+# |v1 |c1  |a1    |b1    |c1    |r1         |2023-05-01 10:00:00|93e6cc4b8b0445cf261e9417106ae6f0|2023-05-01     |2023-05-02   |
+# |v1 |c1  |a1    |b2    |c2    |null       |2023-05-03 15:00:00|a6244d3c7c2aed33c4d9525fbef29c1d|2023-05-03     |2023-05-04   |
+# |v1 |c1  |null  |b2    |c2    |r3         |2023-05-05 15:00:00|17f599be9e07976c2036361c9ad8f633|2023-05-05     |2023-05-06   |
+# |v1 |c1  |null  |null  |c2    |r3         |2023-05-07 15:00:00|a363a9dd6d5b30865ab5813581941516|2023-05-07     |2023-05-09   |
+# |v1 |c1  |null  |null  |null  |null       |2023-05-10 15:00:00|da58ea33b20d82042d9969c46c16c3b8|2023-05-10     |2023-05-12   |
+# |v1 |c1  |null  |null  |c2    |r3         |2023-05-13 15:00:00|a363a9dd6d5b30865ab5813581941516|2023-05-13     |9999-12-31   |
+# +---+----+------+------+------+-----------+-------------------+--------------------------------+---------------+-------------+
+
+# 5. Join scd2 tables
+
+df1_scd2_j, df2_scd2_j = [SCD2Helper(df, ['pk1', 'pk2'], [non_pk_col], 'ts').df_to_scd2().cache() for df, non_pk_col in zip((df1, df2), ('email_id', 'phone_id'))]
+df1_scd2_j, df2_scd2_j = [SCD2Helper(df.drop('ts'), ['pk1', 'pk2'], [non_pk_col], 'ts') for df, non_pk_col in zip((df1_scd2_j, df2_scd2_j),('email_id', 'phone_id'))]
+df1_scd2_j.join_scd2(df2_scd2_j).orderBy('pk1', 'pk2', 'row_actual_from').show(100, False)
+# +---+---+--------+--------+---------------+-------------+
+# |pk1|pk2|email_id|phone_id|row_actual_from|row_actual_to|
+# +---+---+--------+--------+---------------+-------------+
+# |v1 |c1 |e1      |e1      |2023-05-01     |2023-05-03   |
+# |v1 |c1 |e2      |e1      |2023-05-04     |2023-05-05   |
+# |v1 |c1 |e2      |e2      |2023-05-06     |2023-05-09   |
+# |v1 |c1 |e3      |e2      |2023-05-10     |2023-05-11   |
+# |v1 |c1 |e1      |e3      |2023-05-12     |2023-05-12   |
+# |v1 |c1 |e1      |e1      |2023-05-13     |9999-12-31   |
+# |v1 |c2 |e1      |e1      |2023-05-01     |2023-05-05   |
+# |v1 |c2 |e1      |e2      |2023-05-06     |2023-05-11   |
+# |v1 |c2 |e1      |e3      |2023-05-12     |2023-05-12   |
+# |v1 |c2 |e1      |e1      |2023-05-13     |9999-12-31   |
+# |v1 |c3 |e2      |null    |2023-05-04     |2023-05-09   |
+# |v1 |c3 |e3      |null    |2023-05-10     |2023-05-11   |
+# |v1 |c3 |e1      |null    |2023-05-12     |9999-12-31   |
+# +---+---+--------+--------+---------------+-------------+
+
+# 6. Merge SCD2 update
+df_merged_upd = SCD2Helper(dfv1, pk=['pk1', 'pk2'], non_pk=['nonpk1', 'nonpk2', 'nonpk3']).merge_scd2_update(dfv2_ded).cache()
+df_merged_upd.show(10, False)
+# +---+---+------+------+------+-----------+---------------+-------------+--------------------------------+
+# |pk1|pk2|nonpk1|nonpk2|nonpk3|nonpk_extra|row_actual_from|row_actual_to|row_hash                        |
+# +---+---+------+------+------+-----------+---------------+-------------+--------------------------------+
+# |v1 |c0 |a1    |b1    |c1    |r1         |2023-01-01     |2023-05-01   |c3ded78319e4a4af660f608d7ce273f7|
+# |v1 |c1 |a1    |b1    |c1    |r1         |2023-01-01     |2023-05-01   |93e6cc4b8b0445cf261e9417106ae6f0|
+# |v1 |c1 |a1    |b1    |c1    |r2         |2023-05-02     |9999-12-31   |93e6cc4b8b0445cf261e9417106ae6f0|
+# |v1 |c3 |a1    |b1    |c1    |r2         |2023-05-01     |9999-12-31   |86c2c40a3d76eb1ea4de2d093525e14b|
+# |v1 |c2 |a1    |b1    |c1    |r2         |2023-05-01     |2023-07-23   |afc91c3bf13930551a1658788e1b5ba5|
+# |v1 |c2 |a3    |b1    |c1    |r2         |2023-07-24     |9999-12-31   |185d9be103f655c0e42a7ed94e81c2e1|
+# |v1 |c0 |a2    |b1    |c1    |r2         |2023-07-24     |9999-12-31   |ebd84206aad35e3e55fb273eaa6eb288|
+# |v1 |c4 |a2    |b1    |c1    |r2         |2023-07-24     |9999-12-31   |f987461f2b6fefed0b4a0b6f740f4a50|
+# +---+---+------+------+------+-----------+---------------+-------------+--------------------------------+
+
+```
 
 
 
@@ -351,4 +482,5 @@ df_dedup.show()
 - [x] Create a new class SCD2Helper to create, validate, update and join SCD2 tables
 - [x] Add automatic tests outside of .ipynb (coverage is very low, so is the available time)
 - [x] Enable linter and reformat code even more
-- [ ] Create class to help to compare pk of different tables and simplify routine operations inside functions
+- [x] Create class to help to compare pk of different tables and simplify routine operations inside functions
+- [ ] Make another code refactoring in the future

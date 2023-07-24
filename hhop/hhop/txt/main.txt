@@ -1116,7 +1116,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         If there are holes in history, this method is going to extrapolate versions falsely
         If it is the case, set a flag fill_history=True
         Returns:
-            DataFrame: DF with merged SCD2 history
+            DataFrame: DF with merged SCD2 history. Subclass of DataFrame.
         """
         df_cols_no_tech = self._df_cols_cl.get_columns_from_groups(
             ["all"], ["tech_cols"]
@@ -1170,20 +1170,19 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
 
         return SCD2Helper(df_result, **self._passed_args)
 
-    def merge_scd2_update(
-        self, df_new: DataFrame, is_deduplicate_df=True
-    ) -> "SCD2Helper":
-        """_summary_
+    def merge_scd2_update(self, df_new: DataFrame) -> "SCD2Helper":
+        """Method to merge new dataframe to the existing one
 
         Args:
-            df_new (DataFrame): It must have the same key as main DF!
-                Otherwise the result will be incorrect
+            df_new (DataFrame): Requirements for the new DF:
+                It must have the same key as main DF!
+                It must be deduplicated
+                It must have columns: row_actual_from, row_actual_to
 
         Returns:
-            SCD2Helper: _description_
+            SCD2Helper: DF with merged update. Subclass of DataFrame
         """
-        # TODO: raise error on different columns
-        # how to handle second df without tech cols?
+
         if "row_hash" not in df_new.columns:
             df_new = df_new.withColumn("row_hash", self.hash_cols())
 
@@ -1199,6 +1198,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             non_pk=self._non_pk,
             tech_cols=self._tech_cols_default_names,
         )
+        DFColValidator(cols1, cols2).is_equal_cols_groups(["all"], raise_exception=True)
         df1 = cols1.mass_rename(
             "_1",
             is_append_suffix=True,
@@ -1319,14 +1319,6 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         df1, df2 = self._df.alias("df1"), df2.alias("df2")
         comp_cols = DFColValidator(instance1._df_cols_cl, instance2._df_cols_cl)
         comp_cols.is_equal_cols_groups(["pk"], raise_exception=True)
-
-        tech_attr = {"row_actual_from", "row_actual_to", "row_hash"}
-
-        def get_non_pk_attrs(df):
-            all_attrs = set(df.columns)
-            pk_attrs = set(df._pk)
-            non_pk_attrs = all_attrs - tech_attr - pk_attrs
-            return non_pk_attrs
 
         greatest_from = F.greatest(
             df1["row_actual_from"], df2["row_actual_from"]
