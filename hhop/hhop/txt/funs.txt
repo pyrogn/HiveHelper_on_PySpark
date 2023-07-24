@@ -177,6 +177,7 @@ def write_table(
                     raise DiffColsException(
                         "columns with existing DF and new DF are different"
                         " and force rewrite flag on diff DDL is set to False"
+                        f" diff is {comp_cols.get_xor_groups(['all'])}"
                         f" {current_cols.get_columns_from_groups(['all'])}"
                         f" {existing_cols.get_columns_from_groups(['all'])}"
                     )

@@ -1182,28 +1182,8 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Returns:
             SCD2Helper: _description_
         """
-        # TODO: raise error when cols are different or different PK
-
-        # TODO: add row_hash and clean up this mess
-        # TODO: think what can be second DF. Deduplicated? Does it contain tech_cols?
-
-        # validate that 2 df have the same columns
-
-        # cols_not_pk = set(common_cols) - set(self._pk) - set(["row_hash"])
-        # # tech_cols_final = ["row_hash", "row_actual_from", "row_actual_to"]
-        # tech_cols_final = []
-        # dict_num_cols = {
-        #     str(enum): cols
-        #     for enum, cols in zip([1, 2], cols_not_pk - set(tech_cols_final))
-        # }
-
-        # def rename_cols(df, num):
-        #     df_temp = df
-        #     for column in cols_not_pk:
-        #         df_temp = df_temp.withColumnRenamed(column, column + str(num))
-        #     return df_temp
-
-        # self._df.printSchema()
+        # TODO: raise error on different columns
+        # how to handle second df without tech cols?
         if "row_hash" not in df_new.columns:
             df_new = df_new.withColumn("row_hash", self.hash_cols())
 
@@ -1231,16 +1211,9 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             group_cols_include=["all"],
             group_cols_exclude=["pk"],
         )
-        # df1.printSchema()
-        # df1.printSchema()
-        # cols1.
 
-        # df1 = DFColCleaner.mass_rename(self._df, 1)
-        # df_new = rename_cols(df_new, 2)
-        # df1.printSchema()
-        # df2 = rename_cols(df_new._df, 2)
         df_new = df2
-        df_history = df1.filter(col("row_actual_to_1") != self._EOW)
+        df_history = self._df.filter(col("row_actual_to") != self._EOW)
         df_actual = df1.filter(col("row_actual_to_1") == self._EOW)
 
         df_merged = df_actual.join(df2, on=[*self._pk], how="full").withColumn(
@@ -1258,21 +1231,14 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             stg_table_name,
             schema=DEFAULT_SCHEMA_WRITE,
             rewrite=True,
-            verbose=True,
+            verbose=False,
         )
-        # DRY
-        tech_cols_suffix_1 = {f"{i}_{1}" for i in self._tech_cols_default_names}
-        tech_cols_suffix_2 = {f"{i}_{2}" for i in self._tech_cols_default_names}
-        cols_suffix_1 = [
-            i
-            for i in DFColCleaner.get_columns_with_suffix(df_merged, "_1")
-            if i not in tech_cols_suffix_1
-        ]
-        cols_suffix_2 = [
-            i
-            for i in DFColCleaner.get_columns_with_suffix(df_merged, "_2")
-            if i not in tech_cols_suffix_2
-        ]
+
+        cols_to_rename = cols1.get_columns_from_groups(["all"], ["tech_cols", "pk"])
+
+        def remove_suffix(suffix, cols=cols_to_rename):
+            return [col(f"{colname}{suffix}").alias(colname) for colname in cols]
+
         df_close = (
             df_merged.filter(col("operation_type") == "close")
             .withColumnRenamed("row_actual_from_1", "row_actual_from")
@@ -1280,7 +1246,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumnRenamed("row_hash_1", "row_hash")
             .select(
                 *self._pk,
-                *cols_suffix_1,  # TODO: need to exclude tech cols and rename back
+                *remove_suffix("_1"),
                 *self._tech_cols_default_names,
             )
         )
@@ -1294,17 +1260,17 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumnRenamed("row_hash_1", "row_hash")
             .select(
                 *self._pk,
-                *DFColCleaner.get_columns_with_suffix(df_merged, "_1"),
+                *remove_suffix("_1"),
                 *self._tech_cols_default_names,
             )
         )
         df_update_new = (
             df_update.withColumn("row_actual_from", F.current_date())
-            .withColumnRenamed("row_actual_to_1", "row_actual_to")
-            .withColumnRenamed("row_hash_1", "row_hash")
+            .withColumnRenamed("row_actual_to_2", "row_actual_to")
+            .withColumnRenamed("row_hash_2", "row_hash")
             .select(
                 *self._pk,
-                *DFColCleaner.get_columns_with_suffix(df_merged, "_1"),
+                *remove_suffix("_2"),
                 *self._tech_cols_default_names,
             )
         )
@@ -1315,32 +1281,31 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
             .withColumnRenamed("row_hash_1", "row_hash")
             .select(
                 *self._pk,
-                *DFColCleaner.get_columns_with_suffix(df_merged, "_1"),
+                *remove_suffix("_1"),
                 *self._tech_cols_default_names,
             )
         )
         df_insert = (
             df_merged.filter(col("operation_type") == "insert")
-            .withColumnRenamed("row_actual_from_1", "row_actual_from")
-            .withColumnRenamed("row_actual_to_1", "row_actual_to")
+            .withColumn("row_actual_from", F.current_date())
+            .withColumnRenamed("row_actual_to_2", "row_actual_to")
             .withColumnRenamed("row_hash_2", "row_hash")
             .select(
                 *self._pk,
-                *cols_suffix_2,
+                *remove_suffix("_2"),
                 *self._tech_cols_default_names,
             )
         )
-        # DFColCleaner.mass_rename(df_insert, '_2', False,)
 
         df_merged_update = union_all(
             df_history, df_nochange, df_close, df_update_close, df_update_new, df_insert
-        ).select(cols1.get_columns_from_groups(["all"]))
+        ).select(self._df_cols_cl.get_columns_from_groups(["all"]))
 
-        # return df_result
         return SCD2Helper(df_merged_update, **self._passed_args)
 
     def join_scd2(self, df2: "SCD2Helper", join_type: str = "full") -> DataFrame:
-        """_summary_
+        """Join two SCD2 tables
+        You may want beforehand to fill history using method .fill_scd2_history
 
         Args:
             df2 (SCD2Helper): DataFrame from the enclosing class
