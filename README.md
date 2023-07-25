@@ -211,7 +211,7 @@ table_partitions_got.cast_col_types({'dt_part': 'date'})
 ```
 
 
-### SCD2Helper (WIP)
+### SCD2Helper
 
 SCD2Helper helps to create, validate, update and join SCD2 tables.
 

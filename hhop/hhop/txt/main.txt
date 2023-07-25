@@ -800,7 +800,7 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         """Pass correct configs to use for the provided DF
 
         Args:
-            df (DataFrame): _description_
+            df (DataFrame): DataFrame for transformation
             pk (List[str]): Primary Key. Defaults to empty list.
             non_pk (List[str]): Non key attributes, for which changes should be created
             time_col (str): Attribute which will be used for sorting and generating row_actual_from
@@ -856,7 +856,8 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         Create SCD2 DF
         Required attrs:
             pk
-            non
+            non_pk
+            time_col
         """
         if not self._time_col:
             raise HhopException("time_col is a required parameter")
@@ -948,11 +949,6 @@ class SCD2Helper(pyspark.sql.dataframe.DataFrame):
         """Validation of a SCD2 table
         Right now it looks messy, it's going to be better
 
-        Args:
-            df (_type_): _description_
-            pk (_type_): _description_
-            non_pk (_type_): _description_
-            time_col (_type_): _description_
         Returns:
             namedtuple with 4 counts. All 0 means all checks are passed
 
